@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keep the supplied picture unchanged; leave space for launcher masks. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="22.2222%">
+    <bitmap
+        android:src="@drawable/ic_bot_art"
+        android:gravity="fill"
+        android:filter="true" />
+</inset>
