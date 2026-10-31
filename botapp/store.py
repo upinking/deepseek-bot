@@ -12,6 +12,8 @@ import sqlite3
 import time
 import uuid
 
+from .personas import DAFEIYU_SUPERVISOR_ROLE
+
 
 JSON_COLUMNS = {"members", "metadata", "source", "context", "detail", "skill_snapshot"}
 BOOL_COLUMNS = {"is_primary", "enabled", "stop_requested", "takeover"}
@@ -252,7 +254,7 @@ class Store:
             if db.execute("SELECT 1 FROM bots LIMIT 1").fetchone():
                 return
             entries = [
-                ("Echo", "你的主要助手，负责协调任务、清楚解释进展，并在需要时联系你。", "echo", "#5454d4", 1),
+                ("大肥鱼", DAFEIYU_SUPERVISOR_ROLE, "dafeiyu", "#4778f5", 1),
                 ("Scout", "研究助手。查找当前来源、区分事实和推断，并返回可核查的链接。", "scout", "#f0a11b", 0),
                 ("Momo", "生活助手。帮助整理日常安排、建立提醒，尊重安静时段。", "momo", "#e34b9a", 0),
             ]

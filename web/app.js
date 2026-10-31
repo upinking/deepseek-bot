@@ -51,6 +51,9 @@ function icon(name) {
 }
 function avatar(bot, group) {
   if (group) { const svg = icon('group'); svg.classList.add('avatar','group-avatar'); return svg; }
+  if (bot && bot.avatar === 'dafeiyu') {
+    const image = node('img','avatar'); image.src = BASE + '/assets/icon.png'; image.alt = bot.name || '大肥鱼'; return image;
+  }
   const color = bot && /^#[0-9a-f]{6}$/i.test(bot.color || '') ? bot.color : COLORS[0];
   const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
   svg.setAttribute('viewBox','0 0 64 64'); svg.setAttribute('role','img'); svg.setAttribute('aria-label',bot && bot.name || 'Bot'); svg.classList.add('avatar');
@@ -117,6 +120,10 @@ const state={
   modalView:null,detailTaskId:null,detailSignature:'',installPrompt:null,swRegistration:null,lastServerSync:0
 };
 function botById(id) { return state.bots.find(function (b) { return b.id===id; }); }
+function botDescription(bot) {
+  const summary=String(bot && bot.role || '').split(/\r?\n/).find(function (line) { return line.trim(); }) || '';
+  return summary.length>160 ? summary.slice(0,157)+'…' : summary;
+}
 function conversation() { return state.conversations.find(function (c) { return c.id===state.conversationId; }); }
 function currentBot() { const c=conversation(); return c && c.kind!=='group' ? botById(list(c.members)[0]) : null; }
 function currentTasks() { return state.tasks.filter(function (t) { return t.conversation_id===state.conversationId; }).sort(function (a,b) { return b.created_at-a.created_at; }); }
@@ -212,7 +219,7 @@ function renderContacts() {
   if (primary && (!query || (primary.name+' '+primary.role).toLowerCase().includes(query))) {
     const card=node('button','primary-card'+(currentBot() && currentBot().id===primary.id ? ' active' : ''));
     const wrap=node('div','avatar-wrap'); wrap.append(avatar(primary)); const star=node('span','primary-star'); star.append(icon('star')); wrap.append(star);
-    card.append(wrap,node('strong','',primary.name),node('span','','主 Bot · 统筹你的工作')); card.onclick=function () { busy(card,function () { return selectBot(primary); }); }; $('primary-contact').append(card);
+    card.append(wrap,node('strong','',primary.name),node('span','','主管 · 统筹你的工作')); card.onclick=function () { busy(card,function () { return selectBot(primary); }); }; $('primary-contact').append(card);
   }
   const contacts=$('contact-list'); const scroll=contacts.scrollTop; contacts.replaceChildren();
   const bots=state.bots.filter(function (b) { return (!primary || b.id!==primary.id) && (!query || (b.name+' '+b.role).toLowerCase().includes(query)); });
@@ -239,9 +246,9 @@ function renderHeading() {
   const c=conversation(), bot=currentBot(), heading=$('conversation-heading'); heading.replaceChildren();
   heading.append(avatar(bot,c && c.kind==='group'));
   const text=node('div','heading-text'); text.append(node('h1','',c && c.kind==='group' ? c.title : bot && bot.name || '你的工作台'));
-  text.append(node('p','',c && c.kind==='group' ? list(c.members).map(function (id) { return (botById(id)||{}).name; }).filter(Boolean).join(' · ') : bot && bot.role || '选择联系人，开始对话')); heading.append(text);
+  text.append(node('p','',c && c.kind==='group' ? list(c.members).map(function (id) { return (botById(id)||{}).name; }).filter(Boolean).join(' · ') : botDescription(bot) || '选择联系人，开始对话')); heading.append(text);
   $('message-input').placeholder=bot ? '给 '+bot.name+' 发消息，或交给它一个任务…' : '发送消息，或交给 Bot 一个任务…';
-  const speaker=$('speaker-select'), previous=speaker.value; speaker.replaceChildren(node('option','','由主 Bot 协调')); speaker.firstChild.value='';
+  const speaker=$('speaker-select'), previous=speaker.value; speaker.replaceChildren(node('option','','由主管协调')); speaker.firstChild.value='';
   if (c && c.kind==='group') list(c.members).forEach(function (id) { const b=botById(id); if (b) { const o=node('option','','@ '+b.name); o.value=id; speaker.append(o); } });
   if (Array.from(speaker.options).some(function (o) { return o.value===previous; })) speaker.value=previous;
   hidden(speaker,!c || c.kind!=='group'); $('send-button').disabled=!c;
@@ -275,7 +282,7 @@ function renderMessages(force) {
   const holder=$('messages'), bottom=holder.scrollHeight-holder.scrollTop-holder.clientHeight<100;
   state.messageSignature=signature; const oldTop=holder.scrollTop; holder.replaceChildren();
   if (!state.messages.length) {
-    const c=conversation(),bot=currentBot(),empty=node('div','empty-chat'); empty.append(avatar(bot,c && c.kind==='group'),node('h2','',bot ? '你好，'+bot.name : c ? c.title : '从一段对话开始'),node('p','',bot && bot.role || '把想法发到这里，和 Bot 一起往下做。'),node('p','empty-hint','任务在服务器上执行，离开页面后也能继续。')); holder.append(empty); return;
+    const c=conversation(),bot=currentBot(),empty=node('div','empty-chat'); empty.append(avatar(bot,c && c.kind==='group'),node('h2','',bot ? '你好，'+bot.name : c ? c.title : '从一段对话开始'),node('p','',botDescription(bot) || '把想法发到这里，和 Bot 一起往下做。'),node('p','empty-hint','任务在服务器上执行，离开页面后也能继续。')); holder.append(empty); return;
   }
   state.messages.forEach(function (message) {
     const row=node('article','message-row '+message.role); const bot=botById(message.bot_id); if (message.role!=='user') row.append(avatar(bot || primaryBot()));
@@ -638,7 +645,7 @@ function openBotEditor(bot) {
   const name=field('名字','text',bot && bot.name || ''),role=field('职责与说话风格','textarea',bot && bot.role || '');
   name.input.required=true; name.input.maxLength=64; name.input.placeholder='例如：学习搭子';
   role.input.required=true; role.input.rows=5; role.input.placeholder='例如：帮助我学习物理和编程。用直观例子解释问题，先给提示，再和我一起推导。';
-  const shape=field('头像图案','select',bot && ['orbit','diamond','bloom'].includes(bot.avatar) ? bot.avatar : 'orbit',[{value:'orbit',label:'弧线 · 平和'},{value:'diamond',label:'菱形 · 清晰'},{value:'bloom',label:'星花 · 灵感'}]);
+  const shape=field('头像图案','select',bot && ['orbit','diamond','bloom','dafeiyu'].includes(bot.avatar) ? bot.avatar : 'orbit',[{value:'orbit',label:'弧线 · 平和'},{value:'diamond',label:'菱形 · 清晰'},{value:'bloom',label:'星花 · 灵感'},{value:'dafeiyu',label:'大肥鱼 · 蓝发头像'}]);
   let color=bot && bot.color || COLORS[state.bots.length%COLORS.length]; const colors=node('div','color-options'),preview=node('div','form-row'); preview.style.marginBottom='18px';
   function drawPreview() { preview.replaceChildren(avatar({name:name.input.value || 'Bot',color:color,avatar:shape.input.value}),node('span','muted small-text',name.input.value || '你的新 Bot')); }
   COLORS.forEach(function (value) { const b=node('button','color-option'+(value===color?' selected':'')); b.type='button'; b.style.background=value; b.setAttribute('aria-label','选择颜色 '+value); b.onclick=function () { color=value; colors.querySelectorAll('button').forEach(function (button) { button.classList.toggle('selected',button===b); }); drawPreview(); }; colors.append(b); });
@@ -671,7 +678,7 @@ function openConversationMenu() {
   if (bot) {
     const intro=node('div','form-row'); intro.style.marginBottom='20px'; intro.append(avatar(bot),node('p','muted small-text',bot.role)); body.append(intro);
     body.append(btn('编辑 Bot',function () { openBotEditor(bot); },'secondary wide','edit'));
-    if (!bot.is_primary) { const primary=btn('设为主 Bot',function () { busy(primary,async function () { await mutation('/api/bots/'+encodeURIComponent(bot.id)+'/primary','POST',{}); await refreshCollections(); closeModal(); toast('已将 '+bot.name+' 设为主 Bot'); }); },'subtle wide','star'); primary.style.marginTop='8px'; body.append(primary); }
+    if (!bot.is_primary) { const primary=btn('设为主管',function () { busy(primary,async function () { await mutation('/api/bots/'+encodeURIComponent(bot.id)+'/primary','POST',{}); await refreshCollections(); closeModal(); toast('已将 '+bot.name+' 设为主管'); }); },'subtle wide','star'); primary.style.marginTop='8px'; body.append(primary); }
   } else {
     body.append(node('p','muted small-text','群聊成员'));
     list(c.members).forEach(function (id) { const b=botById(id); if (!b) return; const row=node('div','form-row'); row.style.marginBottom='13px'; row.append(avatar(b),node('strong','',b.name),node('span','muted small-text',b.role)); body.append(row); });
