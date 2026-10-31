@@ -1,0 +1,45 @@
+import groovy.json.JsonOutput
+
+plugins { id 'com.android.application' }
+
+// Personal server URL and signing material come from ignored local inputs.
+// A public-source build defaults to the server setup screen.
+def signingFile = rootProject.file('../data/android-signing/signing.properties')
+def privateSigning = new Properties()
+if (signingFile.exists()) signingFile.withInputStream { privateSigning.load(it) }
+
+android {
+    namespace 'io.github.upinking.deepseekbot'
+    compileSdk 36
+    buildToolsVersion '35.0.0'
+    defaultConfig {
+        applicationId 'io.github.upinking.deepseekbot'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+        buildConfigField 'String', 'DEFAULT_SERVER_URL', JsonOutput.toJson(providers.gradleProperty('serverUrl').getOrElse(''))
+    }
+    buildFeatures { buildConfig true }
+    signingConfigs {
+        if (signingFile.exists()) {
+            release {
+                storeFile new File(signingFile.parentFile, privateSigning.getProperty('storeFile'))
+                storePassword privateSigning.getProperty('storePassword')
+                keyAlias privateSigning.getProperty('keyAlias')
+                keyPassword privateSigning.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        debug { applicationIdSuffix '.debug' }
+        release {
+            minifyEnabled false
+            if (signingFile.exists()) signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

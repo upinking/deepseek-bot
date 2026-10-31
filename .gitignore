@@ -10,3 +10,9 @@ output/
 .pytest_cache/
 .DS_Store
 *.sqlite*
+android/.gradle/
+android/**/build/
+android/local.properties
+*.keystore
+*.jks
+dist/
