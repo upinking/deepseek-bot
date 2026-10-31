@@ -1,0 +1,17 @@
+[Unit]
+Description=DeepSeek Bot private assistant
+After=docker.service deepseek-bot-browser.service
+Requires=docker.service
+Wants=deepseek-bot-browser.service
+
+[Service]
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/etc/deepseek-bot.env
+ExecStartPre=-/usr/bin/docker rm -f deepseek-bot
+ExecStart=/usr/bin/docker run --rm --name deepseek-bot --network host --read-only --tmpfs /tmp:rw,size=128m --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 768m --cpus 1.5 --user ${BOT_UID}:${BOT_GID} -e BOT_DATA_DIR=/data -e BOT_CDP_URL=http://127.0.0.1:9223 -e BOT_BASE_PATH=/deepseek -e BOT_PORT=8765 -e BOT_VAPID_SUBJECT -v /opt/deepseek-bot/app:/app:ro -v /var/lib/deepseek-bot/app:/data deepseek-bot:runtime
+ExecStop=/usr/bin/docker stop -t 20 deepseek-bot
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

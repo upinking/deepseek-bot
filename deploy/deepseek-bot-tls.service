@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew DeepSeek Bot IP TLS certificate
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm --network host -v /etc/deepseek-bot-tls/certs:/certs -v /etc/deepseek-bot-tls/work:/work -v /etc/deepseek-bot-tls/logs:/logs -v /var/www/deepseek-bot-acme:/webroot deepseek-bot:certbot renew --non-interactive --cert-name deepseek-bot-ip --config-dir /certs --work-dir /work --logs-dir /logs
+ExecStartPost=/usr/sbin/nginx -t
+ExecStartPost=/bin/systemctl reload nginx

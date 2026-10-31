@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f2">
+  <meta name="description" content="你的私人 Bot 工作台。聊天、记忆与云浏览器任务，在电脑和手机之间继续。">
+  <title>DeepSeek Bot · 私人工作台</title>
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./assets/icon.svg">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div id="connection-banner" class="connection-banner hidden" role="status"></div>
+  <section id="auth-screen" class="auth-screen">
+    <div class="auth-story" aria-hidden="true">
+      <div class="brand"><img src="./assets/icon.svg" alt=""><span>DeepSeek Bot</span></div>
+      <div class="auth-art"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><img src="./assets/icon.svg" alt=""></div>
+      <div class="auth-story-text"><span class="eyebrow">你的私人工作台</span><h1>与 Bot 对话，<br>在云端完成任务。</h1><p>在电脑和手机上查看聊天、记忆、<br>例行任务和服务器浏览器。</p></div>
+    </div>
+    <div class="auth-main">
+      <div class="auth-card">
+        <div class="mobile-brand brand"><img src="./assets/icon.svg" alt=""><span>DeepSeek Bot</span></div>
+        <span class="eyebrow">私人工作台</span>
+        <h2 id="auth-title">欢迎回来</h2>
+        <p id="auth-description">输入工作台密码，继续你的对话。</p>
+        <form id="auth-form" method="post">
+          <label class="field"><span>工作台密码</span><input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="输入登录密码" required></label>
+          <p id="auth-error" class="form-error hidden" role="alert"></p>
+          <button id="auth-submit" class="button primary wide" type="submit">登录工作台 <span aria-hidden="true">→</span></button>
+        </form>
+        <p class="auth-footnote">个人使用 · 记录由你的服务器保存</p>
+        <button id="auth-retry" class="button subtle hidden" type="button">重新连接</button>
+      </div>
+    </div>
+  </section>
+  <div id="app" class="app hidden">
+    <button id="sidebar-scrim" class="scrim hidden" aria-label="关闭联系人列表"></button>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top"><div class="brand"><img src="./assets/icon.svg" alt=""><span>DeepSeek Bot</span></div><button id="sidebar-close" class="icon-button mobile-only" aria-label="关闭联系人列表"></button></div>
+      <div class="sidebar-tools"><label class="search-box"><span id="search-icon"></span><input id="contact-search" type="search" placeholder="搜索联系人或群聊" aria-label="搜索联系人或群聊"></label><button id="new-contact" class="icon-button outlined" title="新建 Bot 或群聊" aria-label="新建 Bot 或群聊"></button></div>
+      <div id="primary-contact"></div>
+      <nav id="contact-list" class="contact-list" aria-label="联系人和群聊"></nav>
+      <div class="sidebar-bottom">
+        <div class="workspace-note"><span class="status-dot"></span><span>私人工作台</span><span id="sidebar-work-count"></span></div>
+        <nav id="management-nav" class="management-nav" aria-label="工作台管理"></nav>
+      </div>
+    </aside>
+    <main class="chat-panel">
+      <header class="chat-header">
+        <button id="sidebar-open" class="icon-button sidebar-toggle" aria-label="打开联系人列表"></button>
+        <div id="conversation-heading" class="conversation-heading"></div>
+        <div class="header-actions"><button id="tasks-open" class="button subtle compact" aria-label="任务记录"><span id="tasks-icon"></span><span class="button-label">任务</span><span id="tasks-count" class="tiny-count hidden"></span></button><button id="browser-toggle" class="button subtle compact" aria-label="打开云浏览器"><span id="browser-icon"></span><span class="button-label">云浏览器</span></button><button id="conversation-more" class="icon-button" aria-label="对话设置" title="对话设置"></button></div>
+      </header>
+      <div id="config-banner" class="notice-banner hidden"><span>连接 DeepSeek 后，Bot 才能开始回答和执行任务。</span><button id="connect-model" class="text-button">去连接</button></div>
+      <div id="activity-bar" class="activity-bar hidden"></div>
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-label="聊天记录"></div>
+      <div class="composer-area">
+        <div id="pending-files" class="pending-files hidden"></div>
+        <form id="composer" class="composer" method="post">
+          <label class="icon-button attach-button" title="上传文件"><span id="attach-icon"></span><span class="sr-only">上传文件</span><input id="composer-files" type="file" multiple class="sr-only"></label>
+          <textarea id="message-input" rows="1" aria-label="消息内容" placeholder="发送消息，或交给 Bot 一个任务…"></textarea>
+          <button id="send-button" class="send-button" type="submit" aria-label="发送消息"></button>
+        </form>
+        <div class="composer-meta"><select id="speaker-select" aria-label="选择回复的 Bot" class="hidden"></select><span>Enter 发送 · Shift + Enter 换行</span><span id="sync-label">记录保存在云端</span></div>
+      </div>
+    </main>
+    <button id="browser-scrim" class="scrim browser-scrim hidden" aria-label="关闭云浏览器"></button>
+    <aside id="browser-panel" class="browser-panel" aria-label="云浏览器">
+      <header class="browser-header"><div><span class="eyebrow">CLOUD BROWSER</span><h2>云浏览器</h2></div><button id="browser-close" class="icon-button" aria-label="关闭云浏览器"></button></header>
+      <div class="browser-body">
+        <label class="field small"><span>当前任务</span><select id="browser-task-select"><option value="">选择一个任务</option></select></label>
+        <div id="browser-status" class="browser-status">选择任务，查看它正在访问的页面。</div>
+        <div class="browser-window">
+          <div class="browser-window-bar"><div class="window-dots"><i></i><i></i><i></i></div><span id="browser-page-title">尚未打开页面</span><button id="browser-refresh" class="icon-button small-icon" aria-label="刷新页面预览" title="刷新预览"></button></div>
+          <div id="browser-image-stage" class="browser-image-stage"><div id="browser-placeholder" class="browser-placeholder"></div><img id="browser-image" class="hidden" alt="服务器浏览器当前页面。接管后可点击画面操作。"></div>
+          <div id="browser-page-url" class="browser-page-url">页面画面来自服务器</div>
+        </div>
+        <div class="browser-takeover-row"><p id="takeover-hint">Bot 操作期间，你可以随时接管。</p><button id="takeover-toggle" class="button secondary compact" disabled>接管浏览器</button></div>
+        <div id="manual-controls" class="manual-controls">
+          <form id="browser-address-form" class="address-form"><input id="browser-address" type="url" placeholder="https://…" aria-label="网页地址"><button type="submit" class="icon-button outlined" title="打开地址" aria-label="打开地址" data-manual></button></form>
+          <div class="browser-quick-actions"><button class="button subtle compact" data-browser-action="back" data-manual>后退</button><button class="button subtle compact" data-browser-action="scroll-up" data-manual>上滚</button><button class="button subtle compact" data-browser-action="scroll-down" data-manual>下滚</button><button class="button subtle compact" data-browser-action="new-tab" data-manual>新标签</button></div>
+          <details class="browser-details"><summary>页面元素与输入</summary>
+            <label class="field small"><span>选择页面元素</span><select id="browser-element"><option value="">先刷新页面结构</option></select></label>
+            <div class="form-row"><button id="element-click" class="button secondary compact" data-manual>点击元素</button><button id="element-download" class="button subtle compact" data-manual>下载链接</button></div>
+            <label class="field small"><span>填写内容</span><input id="browser-fill" placeholder="选择输入框后填写" autocomplete="off"></label>
+            <button id="element-fill" class="button secondary compact wide" data-manual>填写到选中元素</button>
+            <div class="key-row"><input id="browser-key" value="Enter" aria-label="按键名称" autocomplete="off"><button id="element-key" class="button secondary compact" data-manual>发送按键</button></div>
+            <label class="field small"><span>向网页上传文件</span><select id="browser-upload-file"><option value="">选择工作区文件</option></select></label>
+            <button id="element-upload" class="button secondary compact wide" data-manual>上传到选中元素</button>
+            <label class="field small"><span>切换标签页</span><select id="browser-tabs"><option value="">点击下方读取标签页</option></select></label><button id="browser-tabs-refresh" class="button subtle compact" data-manual>读取标签页</button>
+          </details>
+          <details class="browser-details"><summary>页面文字</summary><pre id="browser-page-text">页面文字会在载入后显示。</pre></details>
+        </div>
+        <p class="browser-footnote">接管时 Bot 暂停下达动作。交回前会重新观察页面。</p>
+      </div>
+    </aside>
+  </div>
+  <dialog id="modal" class="modal"><header class="modal-header"><div><span id="modal-eyebrow" class="eyebrow">WORKSPACE</span><h2 id="modal-title"></h2></div><button id="modal-close" class="icon-button" aria-label="关闭对话框"></button></header><div id="modal-body" class="modal-body"></div></dialog>
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+</body>
+</html>

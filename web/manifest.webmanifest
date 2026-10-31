@@ -1,0 +1,15 @@
+{
+  "id": "./",
+  "name": "DeepSeek Bot 私人工作台",
+  "short_name": "DeepSeek Bot",
+  "description": "联系人式 AI 助手、记忆与云浏览器任务。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#f5f5f2",
+  "icons": [
+    {"src": "./assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}
