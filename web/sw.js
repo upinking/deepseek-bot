@@ -1,7 +1,7 @@
 /* Cache the application shell only. Private API responses never enter a cache. */
-const CACHE = 'deepseek-bot-shell-v1';
+const CACHE = 'deepseek-bot-shell-v2';
 const ROOT = new URL('./', self.registration.scope);
-const SHELL = ['./', './style.css', './app.js', './assets/icon.svg', './manifest.webmanifest'].map(function (path) { return new URL(path, ROOT).href; });
+const SHELL = ['./', './style.css', './app.js', './assets/icon.png', './manifest.webmanifest'].map(function (path) { return new URL(path, ROOT).href; });
 self.addEventListener('install', function (event) {
   event.waitUntil(caches.open(CACHE).then(function (cache) { return cache.addAll(SHELL); }));
 });
@@ -37,8 +37,8 @@ self.addEventListener('push', function (event) {
   }
   event.waitUntil(self.registration.showNotification(data.title || 'DeepSeek Bot', {
     body: data.body || data.message || '你的 Bot 有了新的消息。',
-    icon: new URL('./assets/icon.svg', ROOT).href,
-    badge: new URL('./assets/icon.svg', ROOT).href,
+    icon: new URL('./assets/icon.png', ROOT).href,
+    badge: new URL('./assets/icon.png', ROOT).href,
     tag: data.tag || data.task_id || 'deepseek-bot',
     data: {url: target.href}
   }));
