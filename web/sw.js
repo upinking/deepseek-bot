@@ -1,7 +1,7 @@
 /* Cache the application shell only. Private API responses never enter a cache. */
-const CACHE = 'deepseek-bot-shell-v3';
+const CACHE = 'deepseek-bot-shell-v5';
 const ROOT = new URL('./', self.registration.scope);
-const SHELL = ['./', './style.css', './app.js', './assets/icon.png', './manifest.webmanifest'].map(function (path) { return new URL(path, ROOT).href; });
+const SHELL = ['./', './style.css?v=5', './app.js?v=5', './assets/icon.png', './assets/dafeiyu-avatar.png', './manifest.webmanifest'].map(function (path) { return new URL(path, ROOT).href; });
 self.addEventListener('install', function (event) {
   event.waitUntil(caches.open(CACHE).then(function (cache) { return cache.addAll(SHELL); }));
 });

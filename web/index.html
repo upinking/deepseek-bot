@@ -9,8 +9,8 @@
   <link rel="icon" href="./assets/icon.png" type="image/png">
   <link rel="apple-touch-icon" href="./assets/icon.png">
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./style.css">
-  <script src="./app.js" defer></script>
+  <link rel="stylesheet" href="./style.css?v=5">
+  <script src="./app.js?v=5" defer></script>
 </head>
 <body>
   <div id="connection-banner" class="connection-banner hidden" role="status"></div>
@@ -43,9 +43,10 @@
       <div class="sidebar-tools"><label class="search-box"><span id="search-icon"></span><input id="contact-search" type="search" placeholder="搜索联系人或群聊" aria-label="搜索联系人或群聊"></label><button id="new-contact" class="icon-button outlined" title="新建 Bot 或群聊" aria-label="新建 Bot 或群聊"></button></div>
       <div id="primary-contact"></div>
       <nav id="contact-list" class="contact-list" aria-label="联系人和群聊"></nav>
-      <div class="sidebar-bottom">
-        <div class="workspace-note"><span class="status-dot"></span><span>私人工作台</span><span id="sidebar-work-count"></span></div>
-        <nav id="management-nav" class="management-nav" aria-label="工作台管理"></nav>
+      <div id="account-area" class="sidebar-bottom account-area">
+        <div id="account-menu" class="account-menu hidden" role="menu" aria-label="账户菜单"></div>
+        <button id="account-button" class="account-button" type="button" aria-label="打开账户菜单" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu"></button>
+        <span id="sidebar-work-count" class="sr-only"></span>
       </div>
     </aside>
     <main class="chat-panel">

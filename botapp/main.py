@@ -24,6 +24,7 @@ from .store import Store
 from .runtime import Runtime
 from .scheduler import Scheduler
 from .domain import install_routes
+from .profile import MAX_PROFILE_BODY_BYTES, read_profile, update_profile
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -165,6 +166,21 @@ def create_app(data_dir=None, runtime_enabled=True):
     async def settings():
         status=await browser.status()
         return {"model":store.get_setting("model","deepseek-flash"),"api_base":store.get_setting("api_base","https://api.deepseek.com"),"has_api_key":bool(store.api_key),"browser_available":status["available"],"browser_detail":status["detail"],"timezone":"Asia/Shanghai","push_configured":bool(store.one("SELECT endpoint FROM push_subscriptions LIMIT 1"))}
+
+    @app.get("/api/profile")
+    async def profile():
+        return read_profile(store)
+
+    @app.put("/api/profile")
+    async def save_profile(request: Request):
+        raw = await request.body()
+        if len(raw) > MAX_PROFILE_BODY_BYTES:
+            raise ValueError("个人资料超过大小限制，请缩小头像后重试")
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            raise ValueError("个人资料格式无效") from None
+        return update_profile(store, body)
 
     @app.put("/api/settings")
     async def update_settings(request: Request):
