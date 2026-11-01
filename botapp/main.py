@@ -25,6 +25,7 @@ from .runtime import Runtime
 from .scheduler import Scheduler
 from .domain import install_routes
 from .profile import MAX_PROFILE_BODY_BYTES, read_profile, update_profile
+from .sidebar import install_sidebar_routes
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -317,6 +318,7 @@ def create_app(data_dir=None, runtime_enabled=True):
         return {"ok":sent>0,"detail":f"已向 {sent} 个订阅提交测试通知；请检查手机是否显示"}
 
     install_routes(app,store,runtime)
+    install_sidebar_routes(app,store)
 
     @app.get("/")
     async def index():

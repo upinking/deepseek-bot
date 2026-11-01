@@ -89,6 +89,70 @@ def test_bot_crud_primary_and_direct_conversation(api):
     assert client.delete(f"/api/bots/{remaining[-1]['id']}").status_code == 409
 
 
+@pytest.mark.parametrize("status", ["queued", "paused", "running", "waiting_config", "waiting_user", "waiting_approval"])
+def test_delete_bot_preserves_unfinished_work(api, status):
+    client, store, _ = api
+    bot = client.get("/api/bots").json()[1]
+    task = store.create_task(bot["conversation_id"], bot["id"], "尚未完成的任务")
+    store.execute("UPDATE tasks SET status=? WHERE id=?", (status, task["id"]))
+    store.add_message(bot["conversation_id"], bot["id"], "user", "需要保留的消息", task_id=task["id"])
+    response = client.delete(f"/api/bots/{bot['id']}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "这个 Bot 还有未结束的任务，请先停止任务再删除"
+    assert store.one("SELECT status FROM tasks WHERE id=?", (task["id"],))["status"] == status
+    assert any(b["id"] == bot["id"] for b in client.get("/api/bots").json())
+    assert client.get(f"/api/conversations/{bot['conversation_id']}/messages").json()[0]["content"] == "需要保留的消息"
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed", "cancelled"])
+def test_delete_primary_bot_with_finished_work_keeps_primary_fallback(api, status):
+    client, store, _ = api
+    primary = client.get("/api/bots").json()[0]
+    assert primary["is_primary"]
+    task = store.create_task(primary["conversation_id"], primary["id"], "已经结束的任务")
+    store.execute("UPDATE tasks SET status=? WHERE id=?", (status, task["id"]))
+    assert client.delete(f"/api/bots/{primary['id']}").json() == {"ok": True}
+    assert store.one("SELECT * FROM tasks WHERE id=?", (task["id"],)) is None
+    assert store.one("SELECT * FROM conversations WHERE id=?", (primary["conversation_id"],)) is None
+    remaining = client.get("/api/bots").json()
+    assert len(remaining) == 2 and sum(bot["is_primary"] for bot in remaining) == 1
+
+
+@pytest.mark.parametrize("status", ["cancelled", "succeeded"])
+def test_delete_bot_waits_for_terminal_task_worker_cleanup(api, status):
+    client, store, runtime = api
+    bot = client.get("/api/bots").json()[1]
+    task = store.create_task(bot["conversation_id"], bot["id"], "已结束但仍在收尾")
+    store.execute("UPDATE tasks SET status=? WHERE id=?", (status, task["id"]))
+    runtime._active_id = task["id"]
+    response = client.delete(f"/api/bots/{bot['id']}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "任务正在收尾，请稍后再删除"
+    assert store.one("SELECT id FROM tasks WHERE id=?", (task["id"],))
+    runtime._active_id = None
+    assert client.delete(f"/api/bots/{bot['id']}").json() == {"ok": True}
+    assert store.one("SELECT id FROM tasks WHERE id=?", (task["id"],)) is None
+
+
+def test_delete_parent_bot_waits_for_active_child_cleanup_on_another_bot(api):
+    client, store, runtime = api
+    parent_bot, child_bot, unrelated_bot = client.get("/api/bots").json()
+    parent = store.create_task(parent_bot["conversation_id"], parent_bot["id"], "主管的任务")
+    child = store.create_task(parent_bot["conversation_id"], child_bot["id"], "其他 Bot 的子任务", parent_id=parent["id"])
+    store.execute("UPDATE tasks SET status='cancelled' WHERE id IN (?,?)", (parent["id"], child["id"]))
+    runtime._active_id = child["id"]
+    response = client.delete(f"/api/bots/{parent_bot['id']}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "任务正在收尾，请稍后再删除"
+    assert store.one("SELECT id FROM tasks WHERE id=?", (parent["id"],))
+    assert store.one("SELECT parent_id FROM tasks WHERE id=?", (child["id"],))["parent_id"] == parent["id"]
+    # Cleanup on an independent Bot must not block unrelated contact deletion.
+    assert client.delete(f"/api/bots/{unrelated_bot['id']}").status_code == 200
+    runtime._active_id = None
+    assert client.delete(f"/api/bots/{parent_bot['id']}").json() == {"ok": True}
+    assert store.one("SELECT id FROM tasks WHERE id=?", (parent["id"],)) is None
+
+
 def test_group_send_persists_message_and_queued_task_atomically(api):
     client, store, runtime = api
     bots = client.get("/api/bots").json()

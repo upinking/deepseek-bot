@@ -35,6 +35,10 @@ const PATHS = {
   user:['M20 21v-2a7 7 0 0 0-14 0v2','M17 7a5 5 0 1 1-10 0 5 5 0 0 1 10 0'],
   smile:['M8 14s1.5 3 4 3 4-3 4-3M8 9h.01M16 9h.01','M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'],
   help:['M12 16h.01M9.5 8.5a2.5 2.5 0 0 1 5 .5c0 1.5-2.5 2-2.5 4','M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'],
+  pin:['m16 3 5 5-4 1-3 6-5-5 6-3zM9 15l-6 6'],
+  folder:['M3 7V4h6l2 3h10v13H3zM3 7h18'],
+  copy:['M9 9h12v12H9zM15 9V3H3v12h6'],
+  hide:['m3 3 18 18M10.5 10.5a2 2 0 0 0 3 3M9 5.5c1-.3 2-.5 3-.5 6 0 10 7 10 7a22 22 0 0 1-4 4M6 6a25 25 0 0 0-4 6s4 7 10 7c2 0 4-.8 5-1.5'],
   link:['M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2']
 };
 function node(tag, className, content) {
@@ -120,7 +124,7 @@ const state={
   authenticated:false,bots:[],conversations:[],tasks:[],files:[],settings:{},profile:{display_name:'我',avatar_data:''},messages:[],conversationId:null,selectedTaskId:null,
   pendingFiles:[],messageSignature:'',browserSnapshot:null,browserImageError:false,browserOpen:matchMedia('(min-width:1220px)').matches,
   pollTimer:null,polling:false,pollCount:0,lastInteraction:Date.now(),lastBrowserRefresh:0,browserRefreshing:false,connected:false,
-  modalView:null,detailTaskId:null,detailSignature:'',installPrompt:null,swRegistration:null,lastServerSync:0,accountMenuOpen:false
+  modalView:null,detailTaskId:null,detailSignature:'',installPrompt:null,swRegistration:null,lastServerSync:0,accountMenuOpen:false,sidebar:{bots:{},groups:[]}
 };
 function botById(id) { return state.bots.find(function (b) { return b.id===id; }); }
 function botDescription(bot) {
@@ -139,6 +143,7 @@ function connection(value, message) {
   $('sync-label').textContent=value ? '记录保存在云端' : '等待重新连接';
 }
 function showAuth(error) {
+  closeBotContext(false);
   closeAccountMenu(false);
   clearTimeout(state.pollTimer); hidden($('app'),true); hidden($('auth-screen'),false);
   $('auth-title').textContent='欢迎回来'; $('auth-description').textContent='输入工作台密码，继续你的对话。';
@@ -161,8 +166,8 @@ async function checkAuth() {
 }
 async function loadWorkspace() {
   try {
-    const data=await Promise.all([api('/api/bots'),api('/api/conversations'),api('/api/tasks'),api('/api/files'),api('/api/settings'),api('/api/profile')]);
-    state.bots=list(data[0]); state.conversations=list(data[1]); state.tasks=list(data[2]); state.files=list(data[3]); state.settings=data[4]; state.profile=data[5]; renderAccount();
+    const data=await Promise.all([api('/api/bots'),api('/api/conversations'),api('/api/tasks'),api('/api/files'),api('/api/settings'),api('/api/profile'),api('/api/sidebar')]);
+    state.bots=list(data[0]); state.conversations=list(data[1]); state.tasks=list(data[2]); state.files=list(data[3]); state.settings=data[4]; state.profile=data[5]; state.sidebar=data[6]; renderAccount();
     const requested=new URL(location.href).searchParams.get('conversation');
     let remembered;
     try { remembered=localStorage.getItem('deepseek-conversation:'+BASE); } catch (_) {}
@@ -182,9 +187,10 @@ async function poll() {
     const data=await Promise.all([api('/api/tasks'),api('/api/conversations'),loadMessages(false)]);
     state.tasks=list(data[0]); state.conversations=list(data[1]); state.pollCount++;
     if (state.pollCount%5===0) {
-      const more=await Promise.all([api('/api/bots'),api('/api/files'),api('/api/settings'),api('/api/profile')]);
+      const more=await Promise.all([api('/api/bots'),api('/api/files'),api('/api/settings'),api('/api/profile'),api('/api/sidebar')]);
       state.bots=list(more[0]); state.files=list(more[1]); state.settings=more[2];
       if (JSON.stringify(state.profile)!==JSON.stringify(more[3])) { state.profile=more[3]; renderAccount(); }
+      state.sidebar=more[4];
       renderSettingsBanner();
     }
     state.lastServerSync=Date.now(); connection(true); renderContacts(); renderMessages(false); renderActivity(); renderBrowserTasks();
@@ -205,6 +211,7 @@ async function loadMessages(force) {
 }
 async function selectConversation(id) {
   if (!id) return;
+  closeBotContext(false);
   closeAccountMenu(false);
   state.conversationId=id; state.messageSignature=''; state.selectedTaskId=null; state.browserSnapshot=null;
   try { localStorage.setItem('deepseek-conversation:'+BASE,id); } catch (_) {}
@@ -216,36 +223,203 @@ async function selectConversation(id) {
   state.lastInteraction=Date.now(); schedulePoll(1500);
 }
 async function selectBot(bot) {
+  if (botSidebar(bot.id).unread) await updateBotSidebar(bot.id,{unread:false});
   let direct=state.conversations.find(function (c) { return c.id===bot.conversation_id || c.kind==='direct' && list(c.members).includes(bot.id); });
   if (!direct) { direct=await mutation('/api/conversations','POST',{title:bot.name,kind:'direct',members:[bot.id]}); state.conversations.push(direct); }
   await selectConversation(direct.id);
 }
+const botContext={id:null,main:null,sub:null,groupButton:null,compact:false,press:null,suppressed:null};
+function cancelBotPress() {
+  const press=botContext.press; if (press) clearTimeout(press.timer);
+  if (press && botContext.suppressed && botContext.suppressed.id===press.id && botContext.suppressed.until===Infinity) botContext.suppressed.until=Date.now()+1000;
+  botContext.press=null;
+}
+function botTrigger(id) { return id && document.querySelector('[data-bot-id="'+CSS.escape(id)+'"]'); }
+function contextItems(panel) { return panel ? Array.from(panel.querySelectorAll('[role="menuitem"]:not(:disabled)')) : []; }
+function botSubmenuNeedsCompact() {
+  if (!botContext.main) return true;
+  const box=botContext.main.getBoundingClientRect(),width=matchMedia('(max-width:759px)').matches?238:218;
+  return Math.max(box.left-12,innerWidth-box.right-12)<width;
+}
+function closeBotSubmenu(focus) {
+  if (botContext.sub) botContext.sub.remove(); botContext.sub=null;
+  if (botContext.main) { botContext.main.style.visibility=''; botContext.main.inert=false; botContext.main.removeAttribute('aria-hidden'); }
+  if (botContext.groupButton) { botContext.groupButton.setAttribute('aria-expanded','false'); if (focus) botContext.groupButton.focus(); }
+  botContext.compact=false;
+}
+function closeBotContext(restoreFocus) {
+  const id=botContext.id; closeBotSubmenu(false);
+  if (botContext.main) botContext.main.remove(); botContext.main=null; botContext.id=null; botContext.groupButton=null;
+  const trigger=botTrigger(id); if (trigger) { trigger.setAttribute('aria-expanded','false'); if (restoreFocus) trigger.focus({preventScroll:true}); }
+}
+function attachBotContext(button,bot) {
+  button.dataset.botId=bot.id; button.classList.add('bot-context-target'); button.setAttribute('aria-haspopup','menu'); button.setAttribute('aria-expanded',String(botContext.id===bot.id));
+  button.addEventListener('contextmenu',function (event) {
+    event.preventDefault(); const press=botContext.press;
+    if (press && press.id===bot.id) { clearTimeout(press.timer); press.fired=true; botContext.suppressed={id:bot.id,until:Infinity}; if (botContext.id===bot.id) return; }
+    else cancelBotPress();
+    openBotContext(bot.id,event.clientX,event.clientY,false);
+  });
+  button.addEventListener('keydown',function (event) { if (event.key==='ContextMenu' || event.shiftKey && event.key==='F10') { event.preventDefault(); const r=this.getBoundingClientRect(); openBotContext(bot.id,r.left+Math.min(r.width,180),r.top+Math.min(r.height,40),true); } });
+  button.addEventListener('pointerdown',function (event) {
+    if (event.pointerType!=='touch' && event.pointerType!=='pen' || event.button!==0) return;
+    cancelBotPress(); const press={id:bot.id,x:event.clientX,y:event.clientY,pointerId:event.pointerId,fired:false}; botContext.press=press;
+    press.timer=setTimeout(function () { if (botContext.press!==press) return; press.fired=true; botContext.suppressed={id:bot.id,until:Infinity}; openBotContext(bot.id,press.x,press.y,false); },550);
+  });
+  button.addEventListener('click',function (event) { if (botContext.suppressed && botContext.suppressed.id===bot.id && Date.now()<botContext.suppressed.until) { event.preventDefault(); event.stopImmediatePropagation(); } },true);
+}
+function contextItem(panel,label,symbol,action,options) {
+  const opts=options || {},item=node('button','bot-context-item'+(opts.danger?' danger':'')+(opts.selected?' selected':'')); item.type='button'; item.tabIndex=-1; item.setAttribute('role','menuitem');
+  item.append(icon(symbol),node('span','',label)); item.disabled=Boolean(opts.disabled); if (opts.description) { item.title=opts.description; item.setAttribute('aria-description',opts.description); }
+  if (opts.selected) item.append(icon('check'));
+  if (action) item.onclick=function () { closeBotContext(true); busy(null,function () { return action(); }); };
+  item.addEventListener('pointerenter',function (event) { if (panel===botContext.main && event.pointerType!=='touch' && item!==botContext.groupButton) closeBotSubmenu(false); });
+  panel.append(item); return item;
+}
+function contextSeparator(panel) { const line=node('div','bot-context-separator'); line.setAttribute('role','separator'); panel.append(line); }
+function contextKeyboard(event,panel,isSub) {
+  if (event.key==='Escape' || event.key==='ArrowLeft' && isSub) { event.preventDefault(); event.stopPropagation(); if (botContext.sub) closeBotSubmenu(true); else closeBotContext(true); return; }
+  if (event.key==='Tab') { closeBotContext(true); return; }
+  if (event.key==='ArrowRight' && document.activeElement===botContext.groupButton) { event.preventDefault(); showBotGroupSubmenu(true); return; }
+  if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+  event.preventDefault(); const items=contextItems(panel),index=items.indexOf(document.activeElement);
+  const next=event.key==='Home'?0:event.key==='End'?items.length-1:(index+(event.key==='ArrowDown'?1:-1)+items.length)%items.length; if (items[next]) items[next].focus();
+}
+function openBotContext(id,x,y,keyboard) {
+  const bot=botById(id); if (!bot) return; closeAccountMenu(false); closeBotContext(false);
+  botContext.id=id; const pref=botSidebar(id),main=node('div','bot-context-menu'); botContext.main=main; main.setAttribute('role','menu'); main.setAttribute('aria-label',bot.name+'的菜单');
+  main.append(node('div','bot-context-caption',bot.name));
+  contextItem(main,bot.is_primary?'主管固定置顶':pref.pinned?'取消置顶':'置顶','pin',function () { return updateBotSidebar(id,{pinned:!pref.pinned}); },{disabled:bot.is_primary,description:bot.is_primary?'主管始终显示在侧栏顶部':''});
+  const groups=contextItem(main,'移动到分组','folder',null,{disabled:bot.is_primary,description:bot.is_primary?'主管固定显示，不参与联系人分组':''}); botContext.groupButton=groups; groups.setAttribute('aria-haspopup','menu'); groups.setAttribute('aria-expanded','false'); groups.append(icon('chevron'));
+  groups.onclick=function () { showBotGroupSubmenu(true); };
+  groups.addEventListener('pointerenter',function (event) { if (event.pointerType==='mouse' && !groups.disabled && !botSubmenuNeedsCompact()) showBotGroupSubmenu(false); });
+  contextItem(main,pref.unread?'标为已读':'标为未读','bell',function () { return updateBotSidebar(id,{unread:!pref.unread}); });
+  contextSeparator(main);
+  contextItem(main,'重命名 Bot','edit',function () { openBotRename(bot); });
+  contextItem(main,'职责与头像','user',function () { openBotEditor(bot); });
+  if (!bot.is_primary) contextItem(main,'设为主管','star',async function () { await mutation('/api/bots/'+encodeURIComponent(id)+'/primary','POST',{}); await refreshCollections(); await refreshSidebar(); toast('已将 '+bot.name+' 设为主管'); });
+  contextSeparator(main);
+  contextItem(main,'复制对话 ID','copy',function () { return copyBotConversation(bot); });
+  contextItem(main,'从侧边栏隐藏','hide',async function () { await updateBotSidebar(id,{hidden:true}); toast('已隐藏 '+bot.name,false,{label:'撤销',run:function () { busy(null,function () { return updateBotSidebar(id,{hidden:false}); }); }}); },{disabled:bot.is_primary,description:bot.is_primary?'请先将其他 Bot 设为主管':'可从账户菜单的“隐藏的 Bot”恢复'});
+  contextSeparator(main);
+  const running=state.tasks.some(function (task) { return task.bot_id===id && !TERMINAL.has(task.status); });
+  contextItem(main,'删除 Bot','trash',function () { openBotDelete(bot); },{danger:true,disabled:bot.is_primary || running,description:bot.is_primary?'请先将其他 Bot 设为主管':running?'请先停止这个 Bot 尚未结束的任务':'永久删除 Bot 及其私有记录'});
+  main.onkeydown=function (event) { contextKeyboard(event,main,false); }; main.style.visibility='hidden'; document.body.append(main);
+  const r=main.getBoundingClientRect(),left=Math.max(8,Math.min(x,innerWidth-r.width-8)),top=Math.max(8,Math.min(y,innerHeight-r.height-8)); main.style.left=left+'px'; main.style.top=top+'px'; main.style.visibility='';
+  const trigger=botTrigger(id); if (trigger) trigger.setAttribute('aria-expanded','true'); const first=contextItems(main)[0]; if (first) first.focus({preventScroll:true});
+}
+function showBotGroupSubmenu(focus) {
+  if (!botContext.id || !botContext.groupButton || botContext.groupButton.disabled) return;
+  if (botContext.sub) { if (focus) contextItems(botContext.sub)[0].focus(); return; }
+  const id=botContext.id,pref=botSidebar(id),main=botContext.main,anchor=botContext.groupButton.getBoundingClientRect(),box=main.getBoundingClientRect(),sub=node('div','bot-context-menu bot-context-submenu');
+  sub.setAttribute('role','menu'); sub.setAttribute('aria-label','移动到分组'); botContext.sub=sub; botContext.groupButton.setAttribute('aria-expanded','true');
+  const compact=botSubmenuNeedsCompact(); botContext.compact=compact;
+  if (compact) { const back=contextItem(sub,'返回','chevron',null); back.classList.add('submenu-back'); back.onclick=function () { closeBotSubmenu(true); }; contextSeparator(sub); }
+  contextItem(sub,'未分组','folder',function () { return updateBotSidebar(id,{group_id:null}); },{selected:!pref.group_id});
+  list(state.sidebar.groups).forEach(function (group) { contextItem(sub,group.name,'folder',function () { return updateBotSidebar(id,{group_id:group.id}); },{selected:pref.group_id===group.id}); });
+  contextSeparator(sub); contextItem(sub,'新建分组…','plus',function () { openBotGroupEditor(null,id); }); contextItem(sub,'管理分组…','settings',openBotGroups);
+  sub.onkeydown=function (event) { contextKeyboard(event,sub,true); }; sub.style.visibility='hidden'; document.body.append(sub); const size=sub.getBoundingClientRect();
+  let left=box.right+4; if (left+size.width>innerWidth-8) left=box.left-size.width-4;
+  if (compact) { left=box.left; main.style.visibility='hidden'; main.inert=true; main.setAttribute('aria-hidden','true'); }
+  sub.style.left=Math.max(8,Math.min(left,innerWidth-size.width-8))+'px'; sub.style.top=Math.max(8,Math.min(compact?box.top:anchor.top,innerHeight-size.height-8))+'px'; sub.style.visibility='';
+  if (focus) contextItems(sub)[0].focus();
+}
+function initializeBotContext() {
+  document.addEventListener('pointerdown',function (event) { if (botContext.id && !(botContext.main && botContext.main.contains(event.target)) && !(botContext.sub && botContext.sub.contains(event.target))) closeBotContext(false); });
+  document.addEventListener('pointermove',function (event) { const press=botContext.press; if (press && press.pointerId===event.pointerId && !press.fired && Math.hypot(event.clientX-press.x,event.clientY-press.y)>10) cancelBotPress(); });
+  document.addEventListener('pointerup',function () { const press=botContext.press; if (press && (press.fired || botContext.suppressed && botContext.suppressed.id===press.id && botContext.suppressed.until===Infinity)) botContext.suppressed={id:press.id,until:Date.now()+1000}; cancelBotPress(); });
+  document.addEventListener('pointercancel',cancelBotPress); window.addEventListener('blur',function () { cancelBotPress(); closeBotContext(false); });
+  document.addEventListener('scroll',function (event) { cancelBotPress(); if (botContext.id && !(botContext.main && botContext.main.contains(event.target)) && !(botContext.sub && botContext.sub.contains(event.target))) closeBotContext(false); },true);
+  document.addEventListener('keydown',function (event) { if (event.key==='Escape' && botContext.id && !(botContext.main && botContext.main.contains(event.target)) && !(botContext.sub && botContext.sub.contains(event.target))) { event.preventDefault(); closeBotContext(true); } });
+  window.addEventListener('resize',function () { closeBotContext(false); cancelBotPress(); });
+}
+function openBotRename(bot) {
+  const body=openModal('重命名 '+bot.name,'bot-rename'),form=node('form'),name=field('Bot 名字','text',bot.name); name.input.required=true; name.input.maxLength=64;
+  const save=node('button','button primary','保存名字'); save.type='submit'; const footer=node('div','form-footer'); footer.append(btn('取消',closeModal,'subtle'),save); form.append(name.wrap,footer); body.append(form);
+  submitHandler(form,save,async function () { await mutation('/api/bots/'+encodeURIComponent(bot.id),'PATCH',{name:name.input.value.trim()}); await refreshCollections(); closeModal(); toast('名字已更新'); });
+}
+async function copyBotConversation(bot) {
+  let direct=botDirect(bot); if (!direct) { direct=await mutation('/api/conversations','POST',{title:bot.name,kind:'direct',members:[bot.id]}); state.conversations.push(direct); }
+  try { if (!navigator.clipboard) throw new Error('clipboard'); await navigator.clipboard.writeText(direct.id); toast('对话 ID 已复制'); }
+  catch (_) { const body=openModal('复制对话 ID','copy-conversation'),id=field('对话 ID','text',direct.id); id.input.readOnly=true; body.append(node('p','muted small-text','当前浏览器未允许直接复制，可以选中后复制。'),id.wrap,btn('选中对话 ID',function () { id.input.focus(); id.input.select(); },'secondary')); id.input.focus(); id.input.select(); }
+}
+function openBotDelete(bot) {
+  if (bot.is_primary) { toast('请先将其他 Bot 设为主管。',true); return; }
+  const body=openModal('删除 '+bot.name,'bot-delete'),form=node('form');
+  body.append(node('p','delete-warning','将永久删除这个 Bot、它的单聊消息、任务记录、私有记忆、私有技能和例行安排，并从群聊成员中移除。此操作无法撤销。'));
+  const name=field('输入 Bot 名字以确认','text',''); name.input.required=true; name.input.autocomplete='off'; name.input.placeholder=bot.name;
+  const remove=node('button','button danger','永久删除 '+bot.name); remove.type='submit'; remove.disabled=true; name.input.oninput=function () { remove.disabled=name.input.value!==bot.name; };
+  const footer=node('div','form-footer'); footer.append(btn('取消',closeModal,'subtle'),remove); form.append(name.wrap,footer); body.append(form);
+  submitHandler(form,remove,async function () { if (name.input.value!==bot.name) throw new Error('请输入完整的 Bot 名字。'); await mutation('/api/bots/'+encodeURIComponent(bot.id),'DELETE'); await refreshCollections(); await refreshSidebar(); closeModal(); toast('Bot 已删除'); });
+}
+function openBotGroupEditor(group,moveBotId) {
+  const body=openModal(group?'重命名分组':'新建分组','bot-group-editor'),form=node('form'),name=field('分组名称','text',group?group.name:''); name.input.required=true; name.input.maxLength=40;
+  const save=node('button','button primary',group?'保存分组':'创建分组'); save.type='submit'; const footer=node('div','form-footer'); footer.append(btn('取消',closeModal,'subtle'),save); form.append(name.wrap,footer); body.append(form);
+  submitHandler(form,save,async function () { const result=await mutation('/api/bot-groups'+(group?'/'+encodeURIComponent(group.id):''),group?'PATCH':'POST',{name:name.input.value.trim()}); await refreshSidebar(); if (moveBotId) await updateBotSidebar(moveBotId,{group_id:result.id}); closeModal(); toast(group?'分组已更新':'分组已创建'); });
+}
+async function openBotGroups() {
+  const body=openModal('管理分组','bot-groups'); body.append(node('p','muted small-text','正在读取分组…')); try { await refreshSidebar(); } catch (error) { body.replaceChildren(node('p','form-error',error.message)); return; } if (state.modalView!=='bot-groups') return;
+  body.replaceChildren(); body.append(toolbar('分组只整理侧栏中的联系人。','新建分组',function () { openBotGroupEditor(); })); const holder=node('div','resource-list'); body.append(holder);
+  if (!state.sidebar.groups.length) holder.append(emptyState('还没有分组','可以将研究、学习或生活相关的 Bot 放在一起。','folder'));
+  state.sidebar.groups.forEach(function (group) { const card=node('article','resource-card'),head=node('div','resource-card-head'),actions=node('div','form-row'); head.append(node('h3','',group.name)); actions.append(btn('重命名',function () { openBotGroupEditor(group); },'subtle compact'),btn('删除分组',function () { openBotGroupDelete(group); },'subtle compact')); head.append(actions); const count=state.bots.filter(function (b) { return botSidebar(b.id).group_id===group.id; }).length; card.append(head,node('p','muted small-text',count+' 个 Bot')); holder.append(card); });
+}
+function openBotGroupDelete(group) {
+  const body=openModal('删除分组','bot-group-delete'); body.append(node('p','', '删除“'+group.name+'”后，其中的 Bot 会回到未分组，聊天和其他记录会保留。'));
+  const footer=node('div','form-footer'),remove=btn('删除分组',function () { busy(remove,async function () { await mutation('/api/bot-groups/'+encodeURIComponent(group.id),'DELETE'); await refreshSidebar(); openBotGroups(); }); },'danger'); footer.append(btn('取消',openBotGroups,'subtle'),remove); body.append(footer);
+}
+async function openHiddenBots() {
+  const body=openModal('隐藏的 Bot','hidden-bots'); body.append(node('p','muted small-text','正在读取隐藏的 Bot…')); try { await refreshSidebar(); } catch (error) { body.replaceChildren(node('p','form-error',error.message)); return; } if (state.modalView!=='hidden-bots') return;
+  body.replaceChildren(); body.append(node('p','muted small-text','隐藏只收起侧栏入口，原有聊天、任务和记忆仍在。恢复后可继续使用同一个 Bot。')); const holder=node('div','resource-list'); body.append(holder);
+  const bots=state.bots.filter(function (b) { return !b.is_primary && botSidebar(b.id).hidden; }); if (!bots.length) holder.append(emptyState('没有隐藏的 Bot','右键联系人可将暂时不用的 Bot 从侧栏收起。','hide'));
+  bots.forEach(function (bot) { const card=node('article','resource-card'),head=node('div','resource-card-head'),intro=node('div','form-row'); intro.append(avatar(bot),node('h3','',bot.name)); const restore=btn('恢复到侧栏',function () { busy(restore,async function () { await updateBotSidebar(bot.id,{hidden:false}); toast('已恢复 '+bot.name); openHiddenBots(); }); },'secondary compact'); head.append(intro,restore); card.append(head); holder.append(card); });
+}
+
+function botSidebar(id) {
+  return Object.assign({pinned:false,hidden:false,unread:false,group_id:null},(state.sidebar.bots || {})[id] || {});
+}
+function botDirect(bot) { return state.conversations.find(function (c) { return c.id===bot.conversation_id || c.kind==='direct' && list(c.members).includes(bot.id); }); }
+async function refreshSidebar() { state.sidebar=await api('/api/sidebar'); renderContacts(); }
+async function updateBotSidebar(id,values) {
+  const result=await mutation('/api/bots/'+encodeURIComponent(id)+'/sidebar','PATCH',values);
+  state.sidebar.bots=state.sidebar.bots || {}; state.sidebar.bots[id]=result; renderContacts(); return result;
+}
+function unreadDot() { const dot=node('span','unread-dot'); dot.setAttribute('aria-label','未读'); return dot; }
 function renderContacts() {
-  const query=$('contact-search').value.trim().toLowerCase(); const primary=primaryBot();
+  const query=$('contact-search').value.trim().toLowerCase(),primary=primaryBot();
+  const focused=document.activeElement && document.activeElement.dataset.botId;
   $('primary-contact').replaceChildren();
   if (primary && (!query || (primary.name+' '+primary.role).toLowerCase().includes(query))) {
     const card=node('button','primary-card'+(currentBot() && currentBot().id===primary.id ? ' active' : ''));
     const wrap=node('div','avatar-wrap'); wrap.append(avatar(primary)); const star=node('span','primary-star'); star.append(icon('star')); wrap.append(star);
-    card.append(wrap,node('strong','',primary.name),node('span','','主管 · 统筹你的工作')); card.onclick=function () { busy(card,function () { return selectBot(primary); }); }; $('primary-contact').append(card);
+    card.append(wrap,node('strong','',primary.name),node('span','','主管 · 统筹你的工作')); if (botSidebar(primary.id).unread) card.append(unreadDot());
+    card.onclick=function () { busy(card,function () { return selectBot(primary); }); }; attachBotContext(card,primary); $('primary-contact').append(card);
   }
-  const contacts=$('contact-list'); const scroll=contacts.scrollTop; contacts.replaceChildren();
-  const bots=state.bots.filter(function (b) { return (!primary || b.id!==primary.id) && (!query || (b.name+' '+b.role).toLowerCase().includes(query)); });
-  const groups=state.conversations.filter(function (c) { return c.kind==='group' && (!query || c.title.toLowerCase().includes(query)); });
-  if (bots.length) contacts.append(node('div','list-section-label','联系人'));
-  bots.forEach(function (bot) {
-    const direct=state.conversations.find(function (c) { return c.id===bot.conversation_id || c.kind==='direct' && list(c.members).includes(bot.id); });
-    const active=direct && direct.id===state.conversationId; const b=node('button','contact'+(active?' active':''));
-    b.append(avatar(bot)); const text=node('div','contact-text'); const title=node('div','contact-title'); title.append(node('strong','',bot.name));
+  const contacts=$('contact-list'),scroll=contacts.scrollTop; contacts.replaceChildren();
+  const bots=state.bots.filter(function (b) { return (!primary || b.id!==primary.id) && !botSidebar(b.id).hidden && (!query || (b.name+' '+b.role).toLowerCase().includes(query)); });
+  const chats=state.conversations.filter(function (c) { return c.kind==='group' && (!query || c.title.toLowerCase().includes(query)); });
+  function addBot(bot) {
+    const direct=botDirect(bot),pref=botSidebar(bot.id),active=direct && direct.id===state.conversationId;
+    const b=node('button','contact'+(active?' active':'')+(pref.unread?' unread':'')); b.append(avatar(bot));
+    const text=node('div','contact-text'),title=node('div','contact-title'),name=node('strong','',bot.name); title.append(name);
+    if (pref.unread) title.append(unreadDot());
+    if (pref.pinned) { const marker=icon('pin'); marker.classList.add('contact-pin'); title.append(marker); }
     if (direct && direct.updated_at) title.append(node('time','',time(direct.updated_at)));
     let preview=bot.role || '发送消息，开始对话';
     if (direct && direct.last_message) preview=typeof direct.last_message==='object' ? direct.last_message.content : direct.last_message;
     else if (active && state.messages.length) preview=state.messages[state.messages.length-1].content;
-    text.append(title,node('p','contact-preview',preview)); b.append(text); b.onclick=function () { busy(b,function () { return selectBot(bot); }); }; contacts.append(b);
-  });
-  if (groups.length) contacts.append(node('div','list-section-label','群聊'));
-  groups.forEach(function (c) { const b=node('button','contact'+(c.id===state.conversationId?' active':'')); b.append(avatar(null,true)); const text=node('div','contact-text'); const title=node('div','contact-title'); title.append(node('strong','',c.title)); const members=list(c.members).map(function (id) { return (botById(id)||{}).name; }).filter(Boolean); text.append(title,node('p','contact-preview',members.join('、'))); b.append(text); b.onclick=function () { selectConversation(c.id); }; contacts.append(b); });
-  if (!bots.length && !groups.length && query) contacts.append(node('p','contact-loading','没有找到匹配的联系人或群聊。'));
+    text.append(title,node('p','contact-preview',preview)); b.append(text); b.onclick=function () { busy(b,function () { return selectBot(bot); }); }; attachBotContext(b,bot); contacts.append(b);
+  }
+  function section(name,items) { if (!items.length) return; contacts.append(node('div','list-section-label',name)); items.forEach(addBot); }
+  section('置顶',bots.filter(function (b) { return botSidebar(b.id).pinned; }));
+  const regular=bots.filter(function (b) { return !botSidebar(b.id).pinned; });
+  section('联系人',regular.filter(function (b) { return !botSidebar(b.id).group_id; }));
+  list(state.sidebar.groups).forEach(function (group) { section(group.name,regular.filter(function (b) { return botSidebar(b.id).group_id===group.id; })); });
+  if (chats.length) contacts.append(node('div','list-section-label','群聊'));
+  chats.forEach(function (c) { const b=node('button','contact'+(c.id===state.conversationId?' active':'')); b.append(avatar(null,true)); const text=node('div','contact-text'),title=node('div','contact-title'); title.append(node('strong','',c.title)); const members=list(c.members).map(function (id) { return (botById(id)||{}).name; }).filter(Boolean); text.append(title,node('p','contact-preview',members.join('、'))); b.append(text); b.onclick=function () { selectConversation(c.id); }; contacts.append(b); });
+  if (!bots.length && !chats.length && query) contacts.append(node('p','contact-loading','没有找到匹配的联系人或群聊。'));
   contacts.scrollTop=scroll;
+  if (focused && !botContext.id) { const replacement=document.querySelector('[data-bot-id="'+CSS.escape(focused)+'"]'); if (replacement) replacement.focus({preventScroll:true}); }
+  if (botContext.id && !botById(botContext.id)) closeBotContext(false);
   const count=state.tasks.filter(function (t) { return !TERMINAL.has(t.status); }).length;
   $('sidebar-work-count').textContent=count ? count+' 项任务' : '';
 }
@@ -334,6 +508,7 @@ async function sendMessage(event) {
   });
 }
 function openModal(title, view, large) {
+  closeBotContext(false);
   closeAccountMenu(true);
   state.modalView=view; if (view!=='task-detail') state.detailTaskId=null;
   $('modal-title').textContent=title; $('modal-eyebrow').textContent='WORKSPACE'; $('modal-body').replaceChildren(); $('modal').classList.toggle('large',Boolean(large));
@@ -364,7 +539,7 @@ function userAvatar(profile) {
   const circle=node('span','user-avatar user-initial',initial.toLocaleUpperCase()); circle.setAttribute('aria-hidden','true'); return circle;
 }
 function userIdentity(profile) {
-  const text=node('span','account-identity'); text.append(node('span','account-name',profile.display_name || '我'),node('span','account-subtitle','私人工作台')); return text;
+  const text=node('span','account-identity'); text.append(node('span','account-name',profile.display_name || '我')); return text;
 }
 function closeAccountMenu(restoreFocus) {
   const wasOpen=state.accountMenuOpen; state.accountMenuOpen=false;
@@ -372,6 +547,7 @@ function closeAccountMenu(restoreFocus) {
   if (wasOpen && restoreFocus) $('account-button').focus();
 }
 function openAccountMenu(last) {
+  closeBotContext(false);
   state.accountMenuOpen=true; hidden($('account-menu'),false); $('account-button').setAttribute('aria-expanded','true');
   const items=Array.from($('account-menu').querySelectorAll('[role="menuitem"]'));
   if (items.length) items[last ? items.length-1 : 0].focus();
@@ -392,6 +568,7 @@ function renderAccount() {
   separator();
   const resources=node('div','account-resources'); resources.setAttribute('role','group'); resources.setAttribute('aria-label','工作台工具');
   [['记忆','memory',openMemories],['技能','skill',openSkills],['例行','clock',openRoutines],['文件','file',openFiles]].forEach(function (entry) { resources.append(item(entry[0],entry[1],entry[2])); }); menu.append(resources);
+  menu.append(item('隐藏的 Bot','hide',openHiddenBots));
   separator();
   const help=item('帮助','help',openHelp); help.append(icon('chevron')); menu.append(help,item('退出登录','logout',function (button) { busy(button,logoutWorkspace); }));
   if (state.accountMenuOpen && focused>=0) { const next=menu.querySelectorAll('[role="menuitem"]')[focused]; if (next) next.focus(); }
@@ -683,7 +860,7 @@ function initialize() {
   Object.entries(assigned).forEach(function (pair) { $(pair[0]).append(icon(pair[1])); });
   document.querySelector('#browser-address-form button').append(icon('arrow'));
   $('browser-placeholder').append(icon('browser'),node('span','','页面将在任务访问浏览器后显示。'));
-  renderAccount();
+  initializeBotContext(); renderAccount();
   $('account-button').onclick=function () { if (state.accountMenuOpen) closeAccountMenu(true); else openAccountMenu(); };
   $('account-button').onkeydown=function (event) { if (event.key==='ArrowDown' || event.key==='ArrowUp') { event.preventDefault(); openAccountMenu(event.key==='ArrowUp'); } };
   $('account-menu').onkeydown=function (event) {
@@ -707,7 +884,7 @@ function initialize() {
   $('message-input').onkeydown=function (event) { if (event.key==='Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } };
   $('composer-files').onchange=async function () { const files=Array.from(this.files); this.value=''; if (!files.length) return; $('send-button').disabled=true; try { await uploadFiles(files,true); toast('文件已上传，将随下一条消息发送'); } catch (e) { toast(e.message,true); } finally { $('send-button').disabled=false; } };
   $('sidebar-open').onclick=function () { $('app').classList.add('sidebar-open'); hidden($('sidebar-scrim'),false); applyPanels(); };
-  const closeSidebar=function () { closeAccountMenu(false); $('app').classList.remove('sidebar-open'); hidden($('sidebar-scrim'),true); applyPanels(); };
+  const closeSidebar=function () { closeBotContext(false); closeAccountMenu(false); $('app').classList.remove('sidebar-open'); hidden($('sidebar-scrim'),true); applyPanels(); };
   $('sidebar-close').onclick=closeSidebar; $('sidebar-scrim').onclick=closeSidebar;
   $('browser-toggle').onclick=function () { toggleBrowser(); }; $('browser-close').onclick=function () { toggleBrowser(false); }; $('browser-scrim').onclick=function () { toggleBrowser(false); };
   $('browser-refresh').onclick=function () { refreshBrowser(true); };
@@ -755,6 +932,7 @@ function openNewMenu() {
   body.append(first,node('p','muted small-text','给它名字、职责和说话风格，让它成为一位长期联系人。'));
   const group=btn('创建群聊',openGroupEditor,'secondary wide','group'); group.style.marginTop='17px';
   body.append(group,node('p','muted small-text','让不同职责的 Bot 在同一段对话里协作。'));
+  const tools=node('div','contact-management'); tools.append(btn('管理分组',openBotGroups,'subtle compact','folder'),btn('隐藏的 Bot',openHiddenBots,'subtle compact','hide')); body.append(tools);
 }
 function openBotEditor(bot) {
   const body=openModal(bot?'编辑 '+bot.name:'创建 Bot','bot-editor'),form=node('form');

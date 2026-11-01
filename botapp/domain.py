@@ -118,9 +118,16 @@ def install_routes(app, store, runtime):
         with store.transaction() as db:
             if db.execute("SELECT count(*) FROM bots").fetchone()[0] <= 1:
                 raise HTTPException(409, "请至少保留一个 Bot")
-            if db.execute("SELECT 1 FROM tasks WHERE bot_id=? AND status='running' LIMIT 1", (bot_id,)).fetchone():
-                raise HTTPException(409, "这个 Bot 正在执行任务，请先停止任务再删除")
+            if db.execute("SELECT 1 FROM tasks WHERE bot_id=? AND status NOT IN ('succeeded','failed','cancelled') LIMIT 1", (bot_id,)).fetchone():
+                raise HTTPException(409, "这个 Bot 还有未结束的任务，请先停止任务再删除")
             task_ids = [r[0] for r in db.execute("SELECT id FROM tasks WHERE bot_id=?", (bot_id,))]
+            active_id, seen = getattr(runtime, "_active_id", None), set()
+            while active_id and active_id not in seen:
+                if active_id in task_ids:
+                    raise HTTPException(409, "任务正在收尾，请稍后再删除")
+                seen.add(active_id)
+                active = db.execute("SELECT parent_id FROM tasks WHERE id=?", (active_id,)).fetchone()
+                active_id = active["parent_id"] if active else None
             for task_id in task_ids:
                 db.execute("DELETE FROM events WHERE task_id=?", (task_id,))
                 db.execute("DELETE FROM routine_runs WHERE task_id=?", (task_id,))
