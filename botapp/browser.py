@@ -15,6 +15,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+def _browser_crashed(exc):
+    text = str(exc).lower()
+    return any(token in text for token in ("target crashed", "target closed", "page crashed", "browser has been closed"))
+
+
 class BrowserController:
     def __init__(self, data_dir, cdp_url=None, store=None):
         self.data_dir = Path(data_dir)
@@ -30,6 +35,7 @@ class BrowserController:
         self._configured = set()
         self._downloads = {}
         self._download_jobs = {}
+        self._recovering = False
         if store:
             store.execute("CREATE TABLE IF NOT EXISTS browser_tabs(target_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, tab_id TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL)")
 
@@ -117,7 +123,43 @@ class BrowserController:
         except Exception:
             await route.close()
 
+    async def _disconnect(self):
+        playwright = self.playwright
+        self.context = self.browser = self.playwright = None
+        self.pages.clear()
+        self.refs.clear()
+        self.tab_ids.clear()
+        self._configured.clear()
+        if playwright:
+            try:
+                await playwright.stop()
+            except Exception:
+                pass
+
+    async def _recover(self, operation):
+        try:
+            return await operation()
+        except Exception as exc:
+            if self._recovering or not _browser_crashed(exc):
+                raise
+            self._recovering = True
+            try:
+                await self._disconnect()
+                await self.start()
+                if self.context is None:
+                    raise ValueError(self.error or "云浏览器暂不可用") from exc
+                return await operation()
+            except Exception as again:
+                if _browser_crashed(again):
+                    raise ValueError("云浏览器的页面进程已崩溃，新页面暂时打不开。请稍后重试；查阅公开网页可改用网页搜索。") from again
+                raise
+            finally:
+                self._recovering = False
+
     async def _page(self, task_id):
+        return await self._recover(lambda: self._acquire_page(task_id))
+
+    async def _acquire_page(self, task_id):
         if self.context is None or (self.browser and not self.browser.is_connected()):
             if self.playwright:
                 await self.playwright.stop()
@@ -195,7 +237,10 @@ class BrowserController:
             self.store.event(task_id,"download_error",{"message":"下载失败，请检查文件来源"})
 
     async def _snapshot(self, task_id):
-        p = await self._page(task_id)
+        return await self._recover(lambda: self._read_snapshot(task_id))
+
+    async def _read_snapshot(self, task_id):
+        p = await self._acquire_page(task_id)
         # 序号只绑定这次观察；从不向模型返回输入框的现有值。
         data = await p.evaluate("""() => {
           const els=[...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]')]
@@ -219,11 +264,13 @@ class BrowserController:
 
     async def screenshot(self, task_id):
         async with self.lock:
-            p = await self._page(task_id)
-            # CDP can retain this task as an inactive tab after another task
-            # runs. Focus it so headless Chrome actually paints the frame.
-            await p.bring_to_front()
-            return await p.screenshot(type="png", timeout=12000)
+            async def once():
+                p = await self._acquire_page(task_id)
+                # CDP can retain this task as an inactive tab after another task
+                # runs. Focus it so headless Chrome actually paints the frame.
+                await p.bring_to_front()
+                return await p.screenshot(type="png", timeout=12000)
+            return await self._recover(once)
 
     async def requires_approval(self, task_id, action, args):
         if action in ("upload",):
@@ -249,7 +296,21 @@ class BrowserController:
                     self.pages[task_id] = p
                     self.tab_ids.setdefault(task_id,{})[uuid.uuid4().hex[:8]]=p
                     await self._page(task_id)
-                await p.goto(url, wait_until="domcontentloaded", timeout=25000)
+                async def open_page():
+                    nonlocal p
+                    await p.goto(url, wait_until="domcontentloaded", timeout=25000)
+                    return p
+                async def reopen():
+                    nonlocal p
+                    p = await self._acquire_page(task_id)
+                    await p.goto(url, wait_until="domcontentloaded", timeout=25000)
+                    return p
+                try:
+                    await open_page()
+                except Exception as exc:
+                    if not _browser_crashed(exc):
+                        raise
+                    await self._recover(reopen)
             elif action == "snapshot":
                 pass
             elif action in {"click", "fill", "download", "upload"}:

@@ -1,0 +1,7 @@
+[Unit]
+Description=Check that DeepSeek Bot Chrome can open a page
+After=deepseek-bot-browser.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/deepseek-bot/app/deploy/browser-watch.sh

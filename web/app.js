@@ -122,8 +122,8 @@ async function busy(button, callback) {
 }
 const state={
   authenticated:false,bots:[],conversations:[],tasks:[],files:[],settings:{},profile:{display_name:'我',avatar_data:''},messages:[],conversationId:null,selectedTaskId:null,
-  pendingFiles:[],messageSignature:'',browserSnapshot:null,browserImageError:false,browserOpen:matchMedia('(min-width:1220px)').matches,
-  pollTimer:null,polling:false,pollCount:0,lastInteraction:Date.now(),lastBrowserRefresh:0,browserRefreshing:false,connected:false,
+  pendingFiles:[],messageSignature:'',browserSnapshot:null,browserImageError:false,browserOpen:false,
+  pollTimer:null,polling:false,pollCount:0,lastInteraction:Date.now(),lastBrowserRefresh:0,browserRefreshing:false,connected:false,pinBottom:true,scrollingProgrammatically:false,
   modalView:null,detailTaskId:null,detailSignature:'',installPrompt:null,swRegistration:null,lastServerSync:0,accountMenuOpen:false,sidebar:{bots:{},groups:[]}
 };
 function botById(id) { return state.bots.find(function (b) { return b.id===id; }); }
@@ -175,7 +175,6 @@ async function loadWorkspace() {
     state.conversationId=state.conversations.some(function (c) { return c.id===candidate; }) ? candidate : (state.conversations.find(function (c) { const b=primaryBot(); return b && (c.id===b.conversation_id || list(c.members).includes(b.id)); }) || state.conversations[0] || {}).id;
     hidden($('auth-screen'),true); hidden($('app'),false); applyPanels(); renderContacts(); renderHeading(); renderSettingsBanner();
     connection(true); await loadMessages(true); renderActivity(); renderBrowserTasks();
-    if (state.browserOpen && state.selectedTaskId) refreshBrowser();
     schedulePoll(1500);
   } catch (e) { showAuth(e.message); hidden($('auth-retry'),false); }
 }
@@ -195,7 +194,6 @@ async function poll() {
     }
     state.lastServerSync=Date.now(); connection(true); renderContacts(); renderMessages(false); renderActivity(); renderBrowserTasks();
     if (state.detailTaskId && state.modalView==='task-detail') refreshTaskDetail();
-    if (state.browserOpen && state.selectedTaskId && Date.now()-state.lastBrowserRefresh>5000) refreshBrowser();
   } catch (e) { if (state.authenticated) connection(false,e.message+' 当前显示上次同步的记录。'); }
   finally {
     state.polling=false;
@@ -213,7 +211,7 @@ async function selectConversation(id) {
   if (!id) return;
   closeBotContext(false);
   closeAccountMenu(false);
-  state.conversationId=id; state.messageSignature=''; state.selectedTaskId=null; state.browserSnapshot=null;
+  state.conversationId=id; state.messageSignature=''; state.selectedTaskId=null; state.browserSnapshot=null; state.pinBottom=true;
   try { localStorage.setItem('deepseek-conversation:'+BASE,id); } catch (_) {}
   const url=new URL(location.href); url.searchParams.set('conversation',id); history.replaceState(null,'',url);
   $('app').classList.remove('sidebar-open'); hidden($('sidebar-scrim'),true);
@@ -438,11 +436,137 @@ function renderSettingsBanner() { hidden($('config-banner'),Boolean(state.settin
 function appendLinkedText(parent, content) {
   const parts=String(content || '').split(/(https?:\/\/[^\s<>"'）。，；！？]+)/g);
   parts.forEach(function (part) {
-    if (/^https?:\/\//i.test(part)) { const a=node('a','',part); a.href=part; a.target='_blank'; a.rel='noopener noreferrer'; parent.append(a); }
+    if (/^https?:\/\//i.test(part)) parent.append(safeAnchor(part, part) || document.createTextNode(part));
     else parent.append(document.createTextNode(part));
   });
 }
-function renderMessageContent(parent, content) {
+function safeAnchor(label, href) {
+  let url;
+  try { url=new URL(href); } catch (_) { return null; }
+  if (url.protocol!=='http:' && url.protocol!=='https:') return null;
+  const link=node('a','',label); link.href=url.href; link.target='_blank'; link.rel='noopener noreferrer'; return link;
+}
+function appendInline(parent, text) {
+  const pattern=/(!?\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(https?:\/\/[^\s<>"'）。，；！？]+)/g;
+  let last=0, match;
+  while ((match=pattern.exec(text))) {
+    if (match.index>last) parent.append(document.createTextNode(text.slice(last, match.index)));
+    if (match[1]) {
+      const linked=/^!?\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(match[1]);
+      parent.append(linked && safeAnchor(linked[1], linked[2]) || document.createTextNode(match[1]));
+    } else if (match[2]) parent.append(node('code','',match[2].slice(1,-1)));
+    else if (match[3]) { const strong=node('strong'); appendInline(strong, match[3].slice(2,-2)); parent.append(strong); }
+    else if (match[4]) { const em=node('em'); appendInline(em, match[4].slice(1,-1)); parent.append(em); }
+    else parent.append(safeAnchor(match[5], match[5]) || document.createTextNode(match[5]));
+    last=match.index+match[0].length;
+  }
+  if (last<text.length) parent.append(document.createTextNode(text.slice(last)));
+}
+function splitCells(line) {
+  let value=line.trim();
+  if (value.charAt(0)==='|') value=value.slice(1);
+  if (value.charAt(value.length-1)==='|') value=value.slice(0,-1);
+  const cells=[]; let current='', escaped=false;
+  for (let index=0; index<value.length; index++) {
+    const ch=value.charAt(index);
+    if (escaped) { current+=ch; escaped=false; continue; }
+    if (ch==='\\') { escaped=true; continue; }
+    if (ch==='|') { cells.push(current.trim()); current=''; continue; }
+    current+=ch;
+  }
+  cells.push(current.trim()); return cells;
+}
+function isSeparator(line) {
+  const cells=splitCells(line);
+  return cells.length>=2 && cells.every(function (cell) { return /^:?-{3,}:?$/.test(cell); });
+}
+function columnAlign(spec) {
+  const left=spec.charAt(0)===':', right=spec.charAt(spec.length-1)===':';
+  return left && right ? 'center' : right ? 'right' : 'left';
+}
+function listMarker(line) {
+  const match=/^\s*(?:[-*]|(\d+)\.)\s+(\S.*)$/.exec(line);
+  return match ? {ordered:Boolean(match[1]), text:match[2]} : null;
+}
+function blockKind(lines, index) {
+  const line=lines[index];
+  if (!line || !line.trim()) return '';
+  if (/^\s*```/.test(line)) return 'code';
+  if (/^#{1,6}\s+\S/.test(line)) return 'heading';
+  if (listMarker(line)) return 'list';
+  if (/^>\s?/.test(line)) return 'quote';
+  if (/^(\*\s*\*\s*\*|-{3,}|_{3,})\s*$/.test(line.trim())) return 'rule';
+  if (index+1<lines.length && line.includes('|') && isSeparator(lines[index+1])) return 'table';
+  return '';
+}
+function renderMarkdown(parent, content) {
+  const lines=String(content || '').replace(/\r\n/g,'\n').split('\n');
+  let index=0;
+  while (index<lines.length) {
+    const kind=blockKind(lines, index), line=lines[index];
+    if (!kind) {
+      if (!line.trim()) { index++; continue; }
+      const paragraph=node('p');
+      while (index<lines.length && lines[index].trim() && !blockKind(lines, index)) {
+        if (paragraph.childNodes.length) paragraph.append(node('br'));
+        appendInline(paragraph, lines[index]); index++;
+      }
+      parent.append(paragraph); continue;
+    }
+    if (kind==='code') {
+      const body=[]; index++;
+      while (index<lines.length && !/^\s*```/.test(lines[index])) { body.push(lines[index]); index++; }
+      if (index<lines.length) index++;
+      const pre=node('pre'); pre.append(node('code','',body.join('\n'))); parent.append(pre); continue;
+    }
+    if (kind==='heading') {
+      const match=/^(#{1,6})\s+(\S.*)$/.exec(line), heading=node('h'+match[1].length);
+      appendInline(heading, match[2]); parent.append(heading); index++; continue;
+    }
+    if (kind==='rule') { parent.append(node('hr')); index++; continue; }
+    if (kind==='quote') {
+      const quote=node('blockquote');
+      while (index<lines.length && /^>\s?/.test(lines[index])) {
+        if (quote.childNodes.length) quote.append(node('br'));
+        appendInline(quote, lines[index].replace(/^>\s?/, '')); index++;
+      }
+      parent.append(quote); continue;
+    }
+    if (kind==='list') {
+      const ordered=listMarker(line).ordered, list=node(ordered?'ol':'ul');
+      while (index<lines.length) {
+        const item=listMarker(lines[index]);
+        if (!item || item.ordered!==ordered) break;
+        const entry=node('li'); appendInline(entry, item.text); list.append(entry); index++;
+      }
+      parent.append(list); continue;
+    }
+    const rows=[line], aligns=splitCells(lines[index+1]).map(columnAlign);
+    index+=2;
+    while (index<lines.length && lines[index].trim() && lines[index].includes('|')) { rows.push(lines[index]); index++; }
+    const wrap=node('div','md-table'), table=node('table'), head=node('tr'), body=node('tbody');
+    splitCells(rows[0]).forEach(function (cell, cellIndex) {
+      const cellNode=node('th'); cellNode.style.textAlign=aligns[cellIndex] || 'left'; appendInline(cellNode, cell); head.append(cellNode);
+    });
+    rows.slice(1).forEach(function (row) {
+      const rowNode=node('tr');
+      splitCells(row).forEach(function (cell, cellIndex) {
+        const cellNode=node('td'); cellNode.style.textAlign=aligns[cellIndex] || 'left'; appendInline(cellNode, cell); rowNode.append(cellNode);
+      });
+      body.append(rowNode);
+    });
+    const headRow=node('thead'); headRow.append(head); table.append(headRow, body); wrap.append(table); parent.append(wrap);
+  }
+}
+function withoutSpeaker(content, name) {
+  const text=String(content || '');
+  if (!name) return text;
+  const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const match=text.match(new RegExp('^\\s*\\['+escaped+'\\]\\s*[:：]?\\s*'));
+  return match ? text.slice(match[0].length) : text;
+}
+function renderMessageContent(parent, content, rich) {
+  if (rich) { parent.classList.add('rich'); renderMarkdown(parent, content); return; }
   const parts=String(content || '').split(/(\x60\x60\x60[\s\S]*?\x60\x60\x60)/g);
   parts.forEach(function (part) {
     if (part.startsWith('\x60\x60\x60') && part.endsWith('\x60\x60\x60')) {
@@ -455,27 +579,51 @@ function messageFiles(message) {
   const metadata=object(message.metadata);
   return list(metadata.file_ids || metadata.files).map(function (id) { return typeof id==='object'?id:state.files.find(function (file) { return file.id===id; }); }).filter(Boolean);
 }
+function nearBottom(holder) { return holder.scrollHeight-holder.scrollTop-holder.clientHeight<80; }
+function pendingReply() {
+  const active=currentTasks().find(function (task) { return task.status==='queued' || task.status==='running'; });
+  if (!active) return null;
+  const last=state.messages[state.messages.length-1];
+  if (last && last.role==='assistant' && last.task_id===active.id) return null;
+  return active;
+}
+function stickMessages() {
+  const holder=$('messages');
+  if (!holder || !state.pinBottom) return;
+  state.scrollingProgrammatically=true;
+  holder.style.scrollBehavior='auto';
+  const go=function () { holder.scrollTop=holder.scrollHeight; };
+  go();
+  requestAnimationFrame(function () { go(); requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; }); });
+}
 function renderMessages(force) {
   const attachments=state.messages.map(function (message) { return messageFiles(message).map(function (file) { return [file.id,file.name]; }); });
   const tasks=state.messages.map(function (message) { const task=state.tasks.find(function (item) { return item.id===message.task_id; }); return task ? [task.id,task.status] : null; });
-  const signature=JSON.stringify([state.messages,attachments,tasks]);
+  const pending=pendingReply();
+  const signature=JSON.stringify([state.messages,attachments,tasks,pending && [pending.id,pending.status]]);
   if (!force && signature===state.messageSignature) return;
-  const holder=$('messages'), bottom=holder.scrollHeight-holder.scrollTop-holder.clientHeight<100;
+  const holder=$('messages'), bottom=nearBottom(holder);
   state.messageSignature=signature; const oldTop=holder.scrollTop; holder.replaceChildren();
-  if (!state.messages.length) {
+  if (!state.messages.length && !pending) {
     const c=conversation(),bot=currentBot(),empty=node('div','empty-chat'); empty.append(avatar(bot,c && c.kind==='group'),node('h2','',bot ? '你好，'+bot.name : c ? c.title : '从一段对话开始'),node('p','',botDescription(bot) || '把想法发到这里，和 Bot 一起往下做。'),node('p','empty-hint','任务在服务器上执行，离开页面后也能继续。')); holder.append(empty); return;
   }
   state.messages.forEach(function (message) {
     const row=node('article','message-row '+message.role); const bot=botById(message.bot_id); if (message.role!=='user') row.append(avatar(bot || primaryBot()));
     const block=node('div','message-block'), meta=node('div','message-meta');
     meta.append(node('strong','',message.role==='user'?'你':message.role==='system'?'工作台':bot && bot.name || 'Bot'),node('time','',time(message.created_at)));
-    const content=node('div','message-content'); renderMessageContent(content,message.content); block.append(meta,content);
+    const content=node('div','message-content'); renderMessageContent(content,message.role==='assistant' ? withoutSpeaker(message.content, bot && bot.name) : message.content, message.role==='assistant'); block.append(meta,content);
     const attachments=messageFiles(message);
     if (attachments.length) { const files=node('div','message-files'); attachments.forEach(function (file) { files.append(fileLink(file)); }); block.append(files); }
     if (message.task_id) { const task=state.tasks.find(function (t) { return t.id===message.task_id; }); const b=btn('查看任务',function () { openTaskDetail(message.task_id); },'subtle compact','tasks'); b.style.marginTop='5px'; if (task) b.append(statusPill(task.status)); block.append(b); }
     row.append(block); holder.append(row);
   });
-  holder.scrollTop=force || bottom ? holder.scrollHeight : oldTop;
+  if (pending) {
+    const thinking=node('div','thinking-row'); thinking.setAttribute('role','status'); thinking.setAttribute('aria-label','正在思考');
+    const orb=node('span','thinking-orb'); orb.setAttribute('aria-hidden','true');
+    thinking.append(orb,node('span','thinking-label','正在思考')); holder.append(thinking);
+  }
+  if (force || state.pinBottom || bottom) { state.pinBottom=true; stickMessages(); }
+  else { state.scrollingProgrammatically=true; holder.style.scrollBehavior='auto'; holder.scrollTop=oldTop; requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; }); }
 }
 function renderActivity() {
   const tasks=currentTasks(),active=tasks.find(function (t) { return !TERMINAL.has(t.status); });
@@ -484,6 +632,7 @@ function renderActivity() {
     bar.append(statusPill(active.status),node('span','activity-text',active.error || active.prompt));
     bar.append(btn('查看',function () { openTaskDetail(active.id); },'subtle compact'));
     if (['queued','running','waiting_config','waiting_user','waiting_approval','paused'].includes(active.status)) bar.append(btn('停止',function (e) { busy(e.currentTarget,function () { return taskAction(active.id,'stop'); }); },'subtle compact'));
+    if (state.pinBottom) requestAnimationFrame(stickMessages);
   }
   const count=tasks.filter(function (t) { return !TERMINAL.has(t.status); }).length; $('tasks-count').textContent=count; hidden($('tasks-count'),!count);
 }
@@ -504,7 +653,8 @@ async function sendMessage(event) {
     const result=await mutation('/api/conversations/'+encodeURIComponent(state.conversationId)+'/messages','POST',body);
     $('message-input').value=''; $('message-input').style.height='auto'; state.pendingFiles=[]; renderPendingFiles();
     if (result.task) { state.tasks.unshift(result.task); state.selectedTaskId=result.task.id; }
-    await loadMessages(true); renderActivity(); renderBrowserTasks(); state.lastInteraction=Date.now(); schedulePoll(500);
+    state.pinBottom=true;
+    await loadMessages(true); renderActivity(); renderBrowserTasks(); stickMessages(); state.lastInteraction=Date.now(); schedulePoll(500);
   });
 }
 function openModal(title, view, large) {
@@ -623,7 +773,7 @@ function openPersonalization() {
 }
 function openHelp() {
   const body=openModal('帮助','help');
-  [['与主管合作','直接发消息或交代任务。大肥鱼可以安排其他 Bot 协作，并向你汇总结果。'],['查看任务与浏览器','右上角“任务”可以查看进度、补充要求或停止。打开“云浏览器”可查看页面并接管操作。'],['记忆、技能与例行','从左下角账户菜单进入。记忆保存偏好，技能保存方法，例行负责提醒和定时任务。'],['电脑和手机同步','使用同一个工作台地址登录。任务在服务器运行，离开页面后也能继续；聊天和同步需要联网。']].forEach(function (entry) { const section=node('section','help-section'); section.append(node('h3','',entry[0]),node('p','',entry[1])); body.append(section); });
+  [['与主管合作','直接发消息或交代任务。大肥鱼可以安排其他 Bot 协作，并向你汇总结果。'],['查看任务','右上角“任务”可以查看进度、补充要求或停止。'],['记忆、技能与例行','从左下角账户菜单进入。记忆保存偏好，技能保存方法，例行负责提醒和定时任务。'],['电脑和手机同步','使用同一个工作台地址登录。任务在服务器运行，离开页面后也能继续；聊天和同步需要联网。']].forEach(function (entry) { const section=node('section','help-section'); section.append(node('h3','',entry[0]),node('p','',entry[1])); body.append(section); });
   const link=node('a','button secondary compact','项目说明'); link.href='https://github.com/upinking/deepseek-bot#readme'; link.target='_blank'; link.rel='noopener noreferrer'; link.append(icon('link')); body.append(link);
 }
 
@@ -721,25 +871,19 @@ async function openSettings() {
     if (state.installPrompt) { await state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt=null; }
     else toast('在浏览器菜单选择“安装应用”或“添加到主屏幕”。安装入口由当前浏览器提供。');
   },'secondary','download'));
-  appSection.append(node('p','','安装后可以从桌面打开。离线时只能显示界面外壳；聊天、历史记录和浏览器操作需要联网。服务器上的后台任务不依赖此页面保持打开。'));
+  appSection.append(node('p','','安装后可以从桌面打开。离线时只能显示界面外壳；聊天和历史记录需要联网。服务器上的后台任务不依赖此页面保持打开。'));
   appSection.append(node('div','about-line','时区：'+(state.settings.timezone || 'Asia/Shanghai')+'（北京时间）'));
-  appSection.append(node('div','about-line','云浏览器：'+(state.settings.browser_available?'后台报告可用':'后台尚未报告可用')));
   const logout=btn('退出登录',function () { busy(logout,logoutWorkspace); },'subtle','logout');
   appSection.append(logout); body.append(appSection);
 }
 
 function applyPanels() {
-  $('app').classList.toggle('browser-hidden',!state.browserOpen);
-  hidden($('browser-scrim'),!state.browserOpen || matchMedia('(min-width:1220px)').matches);
-  $('browser-toggle').setAttribute('aria-expanded',String(state.browserOpen));
   const narrow=matchMedia('(max-width:759px)').matches;
   if (!narrow) { $('app').classList.remove('sidebar-open'); hidden($('sidebar-scrim'),true); }
   const sidebarVisible=!narrow || $('app').classList.contains('sidebar-open');
   if (!sidebarVisible) closeAccountMenu(false);
   $('sidebar').inert=!sidebarVisible; $('sidebar').setAttribute('aria-hidden',String(!sidebarVisible));
-  $('browser-panel').inert=!state.browserOpen; $('browser-panel').setAttribute('aria-hidden',String(!state.browserOpen));
-  const overlay=state.browserOpen && !matchMedia('(min-width:1220px)').matches || narrow && sidebarVisible;
-  document.querySelector('.chat-panel').inert=Boolean(overlay);
+  document.querySelector('.chat-panel').inert=Boolean(narrow && sidebarVisible);
 }
 function toggleBrowser(force) {
   state.browserOpen=force===undefined ? !state.browserOpen : Boolean(force); applyPanels();
@@ -749,12 +893,14 @@ function toggleBrowser(force) {
   }
 }
 function resetBrowserPreview(message) {
+  if (!$('browser-placeholder')) return;
   state.browserSnapshot=null; hidden($('browser-image'),true); hidden($('browser-placeholder'),false);
   const placeholder=$('browser-placeholder'); placeholder.replaceChildren(icon('browser'),node('span','',message || '页面将在任务访问浏览器后显示。'));
   $('browser-page-title').textContent='尚未打开页面'; $('browser-page-url').textContent='页面画面来自服务器'; $('browser-page-text').textContent='页面文字会在载入后显示。';
   $('browser-element').replaceChildren(node('option','','先刷新页面结构'));
 }
 function renderBrowserTasks() {
+  if (!$('browser-task-select')) return;
   const select=$('browser-task-select'),tasks=currentTasks(); const signature=tasks.map(function (t) { return t.id+':'+t.status; }).join('|');
   if (select.dataset.signature!==signature) {
     select.dataset.signature=signature; const empty=node('option','','选择一个任务'); empty.value=''; select.replaceChildren(empty);
@@ -772,6 +918,7 @@ function renderBrowserTasks() {
   renderBrowserFileOptions();
 }
 function renderBrowserFileOptions() {
+  if (!$('browser-upload-file')) return;
   const select=$('browser-upload-file'),previous=select.value;
   const option=node('option','','选择工作区文件'); option.value=''; select.replaceChildren(option);
   state.files.forEach(function (file) { const o=node('option','',file.name); o.value=file.id; select.append(o); });
@@ -792,7 +939,7 @@ function applySnapshot(snapshot) {
   if (snapshot.tabs) applyBrowserTabs(snapshot.tabs);
 }
 async function refreshBrowser(manual) {
-  if (!state.selectedTaskId || state.browserRefreshing || !state.authenticated) return;
+  if (!$('browser-image') || !state.selectedTaskId || state.browserRefreshing || !state.authenticated) return;
   const id=state.selectedTaskId; state.browserRefreshing=true; state.lastBrowserRefresh=Date.now();
   try {
     const snapshot=await api('/api/browser/'+encodeURIComponent(id)+'/snapshot');
@@ -856,10 +1003,8 @@ async function registerServiceWorker() {
   } catch (_) { /* The online app remains usable if shell caching is unavailable. */ }
 }
 function initialize() {
-  const assigned={'search-icon':'search','new-contact':'plus','sidebar-close':'close','sidebar-open':'menu','tasks-icon':'tasks','browser-icon':'browser','conversation-more':'more','attach-icon':'plus','send-button':'send','browser-close':'close','browser-refresh':'refresh','modal-close':'close'};
+  const assigned={'search-icon':'search','new-contact':'plus','sidebar-close':'close','sidebar-open':'menu','tasks-icon':'tasks','conversation-more':'more','attach-icon':'plus','send-button':'send','modal-close':'close'};
   Object.entries(assigned).forEach(function (pair) { $(pair[0]).append(icon(pair[1])); });
-  document.querySelector('#browser-address-form button').append(icon('arrow'));
-  $('browser-placeholder').append(icon('browser'),node('span','','页面将在任务访问浏览器后显示。'));
   initializeBotContext(); renderAccount();
   $('account-button').onclick=function () { if (state.accountMenuOpen) closeAccountMenu(true); else openAccountMenu(); };
   $('account-button').onkeydown=function (event) { if (event.key==='ArrowDown' || event.key==='ArrowUp') { event.preventDefault(); openAccountMenu(event.key==='ArrowUp'); } };
@@ -880,28 +1025,13 @@ function initialize() {
     finally { button.disabled=false; }
   };
   $('auth-retry').onclick=checkAuth; $('contact-search').oninput=renderContacts; $('composer').onsubmit=sendMessage;
+  $('messages').addEventListener('scroll',function () { if (!state.scrollingProgrammatically) state.pinBottom=nearBottom(this); });
   $('message-input').oninput=function () { this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,160)+'px'; state.lastInteraction=Date.now(); };
   $('message-input').onkeydown=function (event) { if (event.key==='Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } };
   $('composer-files').onchange=async function () { const files=Array.from(this.files); this.value=''; if (!files.length) return; $('send-button').disabled=true; try { await uploadFiles(files,true); toast('文件已上传，将随下一条消息发送'); } catch (e) { toast(e.message,true); } finally { $('send-button').disabled=false; } };
   $('sidebar-open').onclick=function () { $('app').classList.add('sidebar-open'); hidden($('sidebar-scrim'),false); applyPanels(); };
   const closeSidebar=function () { closeBotContext(false); closeAccountMenu(false); $('app').classList.remove('sidebar-open'); hidden($('sidebar-scrim'),true); applyPanels(); };
   $('sidebar-close').onclick=closeSidebar; $('sidebar-scrim').onclick=closeSidebar;
-  $('browser-toggle').onclick=function () { toggleBrowser(); }; $('browser-close').onclick=function () { toggleBrowser(false); }; $('browser-scrim').onclick=function () { toggleBrowser(false); };
-  $('browser-refresh').onclick=function () { refreshBrowser(true); };
-  $('browser-task-select').onchange=function () { state.selectedTaskId=this.value || null; resetBrowserPreview(); renderBrowserTasks(); refreshBrowser(true); };
-  $('takeover-toggle').onclick=function () { const task=selectedTask(); if (task) busy(this,async function () { await taskAction(task.id,'takeover',{enabled:!task.takeover}); if (task.takeover) await taskAction(task.id,'resume',{}); await refreshBrowser(true); }); };
-  $('browser-address-form').onsubmit=function (e) { e.preventDefault(); browserAction('open',{url:$('browser-address').value},this.querySelector('button')); };
-  document.querySelectorAll('[data-browser-action]').forEach(function (b) { b.onclick=function () { const action=b.dataset.browserAction; if (action==='scroll-up' || action==='scroll-down') browserAction('scroll',{dy:action==='scroll-up'?-500:500},b); else if (action==='new-tab') browserAction('new_tab',{url:$('browser-address').value || 'https://example.com'},b); else browserAction(action,{},b); }; });
-  $('browser-element').onchange=updateSensitiveInput;
-  const refAction=function (action,extra,button) { const ref=$('browser-element').value; if (!ref) { toast('请先选择一个页面元素。',true); return; } return browserAction(action,Object.assign({ref:ref},extra || {}),button); };
-  $('element-click').onclick=function () { refAction('click',{},this); };
-  $('element-download').onclick=function () { refAction('download',{},this); };
-  $('element-fill').onclick=function () { const value=$('browser-fill').value; $('browser-fill').value=''; refAction('fill',{text:value},this); };
-  $('element-key').onclick=function () { browserAction('keypress',{key:$('browser-key').value || 'Enter'},this); };
-  $('element-upload').onclick=function () { const id=$('browser-upload-file').value; if (!id) { toast('请先选择工作区文件。',true); return; } refAction('upload',{file_id:id},this); };
-  $('browser-tabs-refresh').onclick=function () { browserAction('tabs',{},this); };
-  $('browser-tabs').onchange=function () { if (this.value) browserAction('switch_tab',{tab_id:this.value}); };
-  $('browser-image').onclick=function (e) { if (!selectedTask() || !selectedTask().takeover) return; const rect=this.getBoundingClientRect(); browserAction('coordinate_click',{x:Math.round((e.clientX-rect.left)*this.naturalWidth/rect.width),y:Math.round((e.clientY-rect.top)*this.naturalHeight/rect.height)}); };
   $('new-contact').onclick=openNewMenu; $('conversation-more').onclick=openConversationMenu; $('tasks-open').onclick=function () { openTasks(); }; $('connect-model').onclick=openSettings;
   $('modal-close').onclick=closeModal; $('modal').addEventListener('click',function (e) { if (e.target===this) { const r=this.getBoundingClientRect(); if (e.clientX<r.left || e.clientX>r.right || e.clientY<r.top || e.clientY>r.bottom) closeModal(); } });
   $('modal').addEventListener('close',function () { state.modalView=null; state.detailTaskId=null; $('modal-body').replaceChildren(); });
@@ -1018,18 +1148,18 @@ async function refreshTaskDetail(force) {
     if (!force && $('modal-body').contains(document.activeElement) && ['TEXTAREA','INPUT'].includes(document.activeElement.tagName)) return;
     state.detailSignature=signature; const idx=state.tasks.findIndex(function (t) { return t.id===id; }); if (idx>=0) state.tasks[idx]=task;
     const body=$('modal-body'),scroll=body.scrollTop; body.replaceChildren(); const head=node('div','manager-toolbar'); head.append(statusPill(task.status),node('p','','更新于 '+stamp(task.updated_at))); body.append(head,node('div','task-summary',task.prompt));
-    const actions=node('div','task-action-bar'); actions.append(btn('查看云浏览器',function () { state.selectedTaskId=id; closeModal(); toggleBrowser(true); },'secondary','browser'));
+    const actions=node('div','task-action-bar');
     if (!TERMINAL.has(task.status)) actions.append(btn('停止任务',function (e) { busy(e.currentTarget,function () { return taskAction(id,'stop'); }); },'danger','stop'));
     if (['paused','waiting_config','waiting_user','failed','cancelled'].includes(task.status) && !task.takeover) actions.append(btn('继续任务',function (e) { busy(e.currentTarget,function () { return taskAction(id,'resume',{}); }); },'primary','arrow'));
     actions.append(btn('保存为技能',function () { openSkillEditor(null,{name:task.prompt.slice(0,30),bot_id:task.bot_id,content:'任务目标：\n'+task.prompt+'\n\n方法与验证：\n'+(task.result || '请补充可复用的步骤、输入和结果检查方式。')}); },'subtle','skill')); body.append(actions);
     if (task.error) body.append(node('div','task-summary task-error',task.error));
-    if (task.result) { const box=node('div','task-summary'); renderMessageContent(box,task.result); body.append(node('h3','content-title','任务结果'),box); }
+    if (task.result) { const box=node('div','task-summary'); const speaker=botById(task.bot_id); renderMessageContent(box,withoutSpeaker(task.result, speaker && speaker.name),true); body.append(node('h3','content-title','任务结果'),box); }
     if (task.status==='waiting_approval') {
       const approval=node('div','approval-box'),event=events.slice().reverse().find(function (e) { return e.kind==='approval_required'; }),detail=event && object(event.detail);
       approval.append(node('h3','','请确认这一步操作'),node('p','',detail ? JSON.stringify(safeObject(detail),null,2) : '操作内容请查看下方执行记录。'));
       const row=node('div','form-row'); row.append(btn('允许这次操作',function (e) { busy(e.currentTarget,function () { return taskAction(id,'approval',{allow:true}); }); },'primary','check'),btn('拒绝这次操作',function (e) { busy(e.currentTarget,function () { return taskAction(id,'approval',{allow:false}); }); },'subtle')); approval.append(row); body.append(approval);
     }
-    if (task.takeover) body.append(node('div','initialization-box','你正在接管浏览器。完成人工操作后，在云浏览器面板选择“交回并继续”。Bot 将重新观察页面。'));
+    if (task.takeover) { const note=node('div','initialization-box','Bot 暂停在页面操作上。交回后它会自己继续。'); note.append(btn('交回并继续',function (e) { busy(e.currentTarget,async function () { await taskAction(id,'takeover',{enabled:false}); await taskAction(id,'resume',{}); }); },'primary','arrow')); body.append(note); }
     if (task.status!=='succeeded' && task.status!=='waiting_approval' && !task.takeover) {
       const form=node('form'),follow=field('补充说明或改变方向','textarea',''); follow.input.placeholder='例如：先别提交，整理好内容给我看。'; follow.input.rows=2; follow.input.required=true;
       const submit=node('button','button secondary compact','补充并继续'); submit.type='submit'; form.append(follow.wrap,submit); body.append(form);

@@ -663,3 +663,71 @@ async def test_steering_while_takeover_does_not_resume_bot(tmp_path):
         await wait_for(store, task["id"], {"succeeded"})
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_web_search_and_fetch_call_deepseek_and_reject_credentials(tmp_path):
+    store, _, _, task = setup(tmp_path, prompt="今年有哪些国语新专辑")
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path == "/chat/completions":
+            body = json.loads(request.content)
+            if any(item.get("role") == "tool" for item in body["messages"]):
+                return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "根据搜索结果，来源是示例文章。"}, "finish_reason": "stop"}], "usage": {}})
+            calls = [
+                tool("web_search", {"query": "国语 新专辑 2026", "count": 3}, "search"),
+                tool("web_fetch", {"url": "https://example.com/album"}, "fetch"),
+                tool("web_fetch", {"url": "http://user:secret@example.com/album"}, "bad"),
+            ]
+            return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": calls}, "finish_reason": "tool_calls"}], "usage": {}})
+        if request.url.path == "/v1/tools/search":
+            assert request.headers["Authorization"] == "Bearer test-model-secret-123"
+            body = json.loads(request.content)
+            assert body["query"] == "国语 新专辑 2026" and body["count"] == 3 and body["need_content"] is False
+            assert body["ori_question"] == "今年有哪些国语新专辑"
+            return httpx.Response(200, json={"results": [{"title": "新专辑", "url": "https://example.com/album", "snippet": "短摘", "summary": "长摘要", "content": "不应返回", "site_name": "示例", "date": "2026-06-01T00:00:00+00:00", "authority": 3, "rerank_score": 2.2}]})
+        if request.url.path == "/v1/tools/fetch":
+            assert json.loads(request.content)["url"] == "https://example.com/album"
+            return httpx.Response(200, json={"title": "专辑文", "content": "正文" * 7000})
+        return httpx.Response(404, json={"error": {"message": request.url.path}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    runtime = Runtime(store, Browser(), client=client)
+    try:
+        await runtime.start()
+        row = await wait_for(store, task["id"], {"succeeded", "failed"})
+        assert row["status"] == "succeeded", row["error"]
+        tool_names = [request.url.path for request in requests]
+        assert tool_names.count("/v1/tools/search") == 1
+        assert tool_names.count("/v1/tools/fetch") == 1
+        chats = [json.loads(request.content) for request in requests if request.url.path == "/chat/completions"]
+        results = [json.loads(item["content"]) for item in chats[1]["messages"] if item["role"] == "tool"]
+        assert results[0]["ok"] is True and results[0]["results"][0]["summary"] == "长摘要" and "content" not in results[0]["results"][0]
+        assert results[1]["ok"] is True and results[1]["truncated"] is True and len(results[1]["content"]) == 12000
+        assert results[2]["ok"] is False and "账号密码" in results[2]["error"]
+        assert "web_search" in chats[0]["messages"][0]["content"]
+    finally:
+        await runtime.close()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_direct_reply_omits_speaker_prefix(tmp_path):
+    store, bot, conv, task = setup(tmp_path, "继续说")
+    store.add_message(conv["id"], bot["id"], "assistant", f"[{bot['name']}] 上一句")
+    provider = Provider([answer(f"[{bot['name']}]：这是正文")])
+    runtime = Runtime(store, Browser(), provider=provider)
+    try:
+        await runtime.start()
+        row = await wait_for(store, task["id"], {"succeeded", "failed"})
+        assert row["status"] == "succeeded", row["error"]
+        history = provider.requests[0]["messages"]
+        assert history[1] == {"role": "assistant", "content": "上一句"}
+        assert "不要以 [你的名字] 开头" in history[0]["content"]
+        saved = store.one("SELECT content FROM messages WHERE task_id=? AND role='assistant'", (task["id"],))
+        assert saved["content"] == "这是正文"
+        assert row["result"] == "这是正文"
+    finally:
+        await runtime.close()
