@@ -15,6 +15,8 @@
 5. 在 Bot 联系人或主管卡片上右键（触屏可长按）打开菜单，置顶、分组、标记未读、改名或隐藏联系人。分组会展开子菜单，隐藏的 Bot 可从账户菜单恢复，详见 [Bot 右键菜单](docs/Bot右键菜单.md)。
 6. 安卓上用支持 PWA 的浏览器打开同一地址，在浏览器菜单选择安装或添加到主屏幕。聊天记录、记忆和任务都由同一台服务器保存。
 
+聊天左边的小横条是消息定位：悬停或键盘聚焦预览，点击跳转；方向键、Home/End 选择，Enter 跳转，Escape 关闭预览。电脑上点右上角音符，可连接其他软件播放的音频，让横条随实际声音律动。需要在浏览器共享弹窗中选择来源并勾选共享音频，声音仅在本机分析；可以随时断开。系统或浏览器没有提供音轨时会说明原因，手机和当前 APK 暂不支持系统音频律动，消息定位仍可使用。详见 [消息定位与音乐律动](docs/消息定位与音乐律动.md)。
+
 也提供 Android APK 客户端，支持原生返回、服务器设置及系统文件上传/保存。安装与构建说明见 [Android 安装版](android/README.md)。
 
 若修改过登录密码，首次密码文件会失效。请使用你自己设置的新密码。初始密码不写入源码或本说明。
@@ -71,6 +73,7 @@ uv pip install --python .venv/bin/python -r requirements.lock.txt
 .venv/bin/python -m pytest -q
 RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest tests/test_browser_integration.py -q
 node --check web/app.js
+node --test tests/test_music_capture.cjs
 ```
 
 普通测试包含测试注入的模型响应，用于覆盖失败、取消、审批、交接和重启等边界，不能当作真实 DeepSeek 验证。真实浏览器测试会启动 Chrome 操作本地测试页面；云端实际模型/浏览器验证记录见 `docs/第一版验收记录.md`。

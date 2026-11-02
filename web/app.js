@@ -39,7 +39,8 @@ const PATHS = {
   folder:['M3 7V4h6l2 3h10v13H3zM3 7h18'],
   copy:['M9 9h12v12H9zM15 9V3H3v12h6'],
   hide:['m3 3 18 18M10.5 10.5a2 2 0 0 0 3 3M9 5.5c1-.3 2-.5 3-.5 6 0 10 7 10 7a22 22 0 0 1-4 4M6 6a25 25 0 0 0-4 6s4 7 10 7c2 0 4-.8 5-1.5'],
-  link:['M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2']
+  link:['M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2'],
+  music:['M9 18V5l12-2v13','M9 18a3 3 0 1 1-3-3c1.7 0 3 1.3 3 3M21 16a3 3 0 1 1-3-3c1.7 0 3 1.3 3 3']
 };
 function node(tag, className, content) {
   const value = document.createElement(tag);
@@ -143,6 +144,8 @@ function connection(value, message) {
   $('sync-label').textContent=value ? '记录保存在云端' : '等待重新连接';
 }
 function showAuth(error) {
+  if (window.ChatMusic) window.ChatMusic.stop();
+  if (window.ChatRail) window.ChatRail.closePreview();
   closeBotContext(false);
   closeAccountMenu(false);
   clearTimeout(state.pollTimer); hidden($('app'),true); hidden($('auth-screen'),false);
@@ -209,6 +212,7 @@ async function loadMessages(force) {
 }
 async function selectConversation(id) {
   if (!id) return;
+  window.ChatRail.render([]);
   closeBotContext(false);
   closeAccountMenu(false);
   state.conversationId=id; state.messageSignature=''; state.selectedTaskId=null; state.browserSnapshot=null; state.pinBottom=true; state.awaitingReply=false; state.replyAnchor=null;
@@ -621,7 +625,7 @@ function renderMessages(force) {
   const holder=$('messages'), bottom=nearBottom(holder);
   state.messageSignature=signature; const oldTop=holder.scrollTop; holder.replaceChildren();
   if (!state.messages.length && !pending) {
-    const c=conversation(),bot=currentBot(),empty=node('div','empty-chat'); empty.append(avatar(bot,c && c.kind==='group'),node('h2','',bot ? '你好，'+bot.name : c ? c.title : '从一段对话开始'),node('p','',botDescription(bot) || '把想法发到这里，和 Bot 一起往下做。'),node('p','empty-hint','任务在服务器上执行，离开页面后也能继续。')); holder.append(empty); return;
+    const c=conversation(),bot=currentBot(),empty=node('div','empty-chat'); empty.append(avatar(bot,c && c.kind==='group'),node('h2','',bot ? '你好，'+bot.name : c ? c.title : '从一段对话开始'),node('p','',botDescription(bot) || '把想法发到这里，和 Bot 一起往下做。'),node('p','empty-hint','任务在服务器上执行，离开页面后也能继续。')); holder.append(empty); window.ChatRail.render([]); return;
   }
   function appendMessage(message) {
     const row=node('article','message-row '+message.role); row.dataset.messageId=message.id; if (message.task_id) row.dataset.taskId=message.task_id;
@@ -652,6 +656,7 @@ function renderMessages(force) {
   } else if (state.replyAnchor) { state.scrollingProgrammatically=true; holder.style.scrollBehavior='auto'; holder.scrollTop=oldTop; requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; }); }
   else if (force || state.pinBottom || bottom) { state.pinBottom=true; stickMessages(); }
   else { state.scrollingProgrammatically=true; holder.style.scrollBehavior='auto'; holder.scrollTop=oldTop; requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; }); }
+  window.ChatRail.render(state.messages);
 }
 function renderActivity() {
   const tasks=currentTasks(),active=tasks.find(function (t) { return !TERMINAL.has(t.status); });
@@ -686,6 +691,7 @@ async function sendMessage(event) {
   });
 }
 function openModal(title, view, large) {
+  window.ChatRail.closePreview();
   closeBotContext(false);
   closeAccountMenu(true);
   state.modalView=view; if (view!=='task-detail') state.detailTaskId=null;
@@ -1033,6 +1039,16 @@ async function registerServiceWorker() {
 function initialize() {
   const assigned={'search-icon':'search','new-contact':'plus','sidebar-close':'close','sidebar-open':'menu','tasks-icon':'tasks','conversation-more':'more','attach-icon':'plus','send-button':'send','modal-close':'close'};
   Object.entries(assigned).forEach(function (pair) { $(pair[0]).append(icon(pair[1])); });
+  window.ChatRail.initialize({stage:$('message-stage'),log:$('messages'),rail:$('chat-rail'),list:$('rail-marks'),preview:$('rail-preview'),
+    author:function (message) { return message.role==='user'?'你':message.role==='system'?'工作台':(botById(message.bot_id)||{}).name || 'Bot'; },time:time,
+    onNavigate:function () { state.pinBottom=false; state.replyAnchor=null; state.awaitingReply=false; }
+  });
+  $('music-open').append(icon('music'));
+  window.ChatMusic.initialize({button:$('music-open'),icon:icon,toast:toast,onSpectrum:window.ChatRail.spectrum,host:$('app')});
+  if ('ResizeObserver' in window) {
+    const composerResize=new ResizeObserver(function () { $('app').style.setProperty('--composer-height',$('composer').parentElement.getBoundingClientRect().height+'px'); });
+    composerResize.observe($('composer').parentElement);
+  }
   initializeBotContext(); renderAccount();
   $('account-button').onclick=function () { if (state.accountMenuOpen) closeAccountMenu(true); else openAccountMenu(); };
   $('account-button').onkeydown=function (event) { if (event.key==='ArrowDown' || event.key==='ArrowUp') { event.preventDefault(); openAccountMenu(event.key==='ArrowUp'); } };

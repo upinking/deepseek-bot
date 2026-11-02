@@ -9,8 +9,12 @@
   <link rel="icon" href="./assets/icon.png" type="image/png">
   <link rel="apple-touch-icon" href="./assets/icon.png">
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./style.css?v=20">
-  <script src="./app.js?v=20" defer></script>
+  <link rel="stylesheet" href="./style.css?v=24">
+  <link rel="stylesheet" href="./chat-rail.css?v=24">
+  <link rel="stylesheet" href="./music-player.css?v=24">
+  <script src="./chat-rail.js?v=24" defer></script>
+  <script src="./music-player.js?v=24" defer></script>
+  <script src="./app.js?v=24" defer></script>
 </head>
 <body>
   <div id="connection-banner" class="connection-banner hidden" role="status"></div>
@@ -53,11 +57,15 @@
       <header class="chat-header">
         <button id="sidebar-open" class="icon-button sidebar-toggle" aria-label="打开联系人列表"></button>
         <div id="conversation-heading" class="conversation-heading"></div>
-        <div class="header-actions"><button id="tasks-open" class="button subtle compact" aria-label="任务记录"><span id="tasks-icon"></span><span class="button-label">任务</span><span id="tasks-count" class="tiny-count hidden"></span></button><button id="conversation-more" class="icon-button" aria-label="对话设置" title="对话设置"></button></div>
+        <div class="header-actions"><button id="music-open" class="icon-button" aria-label="音乐律动" title="音乐律动"></button><button id="tasks-open" class="button subtle compact" aria-label="任务记录"><span id="tasks-icon"></span><span class="button-label">任务</span><span id="tasks-count" class="tiny-count hidden"></span></button><button id="conversation-more" class="icon-button" aria-label="对话设置" title="对话设置"></button></div>
       </header>
       <div id="config-banner" class="notice-banner hidden"><span>连接 DeepSeek 后，Bot 才能开始回答和执行任务。</span><button id="connect-model" class="text-button">去连接</button></div>
       <div id="activity-bar" class="activity-bar hidden"></div>
-      <div id="messages" class="messages" role="log" aria-live="polite" aria-label="聊天记录"></div>
+      <div id="message-stage" class="message-stage">
+        <nav id="chat-rail" class="chat-rail" aria-label="按消息定位" hidden><div id="rail-marks" class="rail-marks"></div></nav>
+        <div id="rail-preview" class="rail-preview" role="tooltip" hidden></div>
+        <div id="messages" class="messages" role="log" aria-live="polite" aria-label="聊天记录"></div>
+      </div>
       <div class="composer-area">
         <div id="pending-files" class="pending-files hidden"></div>
         <form id="composer" class="composer" method="post">
