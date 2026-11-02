@@ -20,7 +20,7 @@ const PATHS = {
   skill:['m12 3 3 6 6 3-6 3-3 6-3-6-6-3 6-3z'],
   clock:['M12 8v5l3 2','M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'],
   file:['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5'],
-  settings:['M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8','M20 12l2-2-2-3-3 .5-1-3.5h-4l-1 3-3-.5-2 3 2 2-2 2 2 3 3-.5 1 3h4l1-3 3 .5 2-3z'],
+  settings:['M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z','M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'],
   group:['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.8','M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0M18 3a4 4 0 0 1 0 8'],
   edit:['m16 3 5 5M4 20l4-1L21 6a2 2 0 0 0-3-3L5 16z'],
   trash:['M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7'],
@@ -123,7 +123,7 @@ async function busy(button, callback) {
 const state={
   authenticated:false,bots:[],conversations:[],tasks:[],files:[],settings:{},profile:{display_name:'我',avatar_data:''},messages:[],conversationId:null,selectedTaskId:null,
   pendingFiles:[],messageSignature:'',browserSnapshot:null,browserImageError:false,browserOpen:false,
-  pollTimer:null,polling:false,pollCount:0,lastInteraction:Date.now(),lastBrowserRefresh:0,browserRefreshing:false,connected:false,pinBottom:true,scrollingProgrammatically:false,
+  pollTimer:null,polling:false,pollCount:0,lastInteraction:Date.now(),lastBrowserRefresh:0,browserRefreshing:false,connected:false,pinBottom:true,scrollingProgrammatically:false,awaitingReply:false,replyAnchor:null,
   modalView:null,detailTaskId:null,detailSignature:'',installPrompt:null,swRegistration:null,lastServerSync:0,accountMenuOpen:false,sidebar:{bots:{},groups:[]}
 };
 function botById(id) { return state.bots.find(function (b) { return b.id===id; }); }
@@ -211,7 +211,7 @@ async function selectConversation(id) {
   if (!id) return;
   closeBotContext(false);
   closeAccountMenu(false);
-  state.conversationId=id; state.messageSignature=''; state.selectedTaskId=null; state.browserSnapshot=null; state.pinBottom=true;
+  state.conversationId=id; state.messageSignature=''; state.selectedTaskId=null; state.browserSnapshot=null; state.pinBottom=true; state.awaitingReply=false; state.replyAnchor=null;
   try { localStorage.setItem('deepseek-conversation:'+BASE,id); } catch (_) {}
   const url=new URL(location.href); url.searchParams.set('conversation',id); history.replaceState(null,'',url);
   $('app').classList.remove('sidebar-open'); hidden($('sidebar-scrim'),true);
@@ -294,9 +294,6 @@ function openBotContext(id,x,y,keyboard) {
   contextItem(main,pref.unread?'标为已读':'标为未读','bell',function () { return updateBotSidebar(id,{unread:!pref.unread}); });
   contextSeparator(main);
   contextItem(main,'重命名 Bot','edit',function () { openBotRename(bot); });
-  contextItem(main,'职责与头像','user',function () { openBotEditor(bot); });
-  if (!bot.is_primary) contextItem(main,'设为主管','star',async function () { await mutation('/api/bots/'+encodeURIComponent(id)+'/primary','POST',{}); await refreshCollections(); await refreshSidebar(); toast('已将 '+bot.name+' 设为主管'); });
-  contextSeparator(main);
   contextItem(main,'复制对话 ID','copy',function () { return copyBotConversation(bot); });
   contextItem(main,'从侧边栏隐藏','hide',async function () { await updateBotSidebar(id,{hidden:true}); toast('已隐藏 '+bot.name,false,{label:'撤销',run:function () { busy(null,function () { return updateBotSidebar(id,{hidden:false}); }); }}); },{disabled:bot.is_primary,description:bot.is_primary?'请先将其他 Bot 设为主管':'可从账户菜单的“隐藏的 Bot”恢复'});
   contextSeparator(main);
@@ -580,12 +577,31 @@ function messageFiles(message) {
   return list(metadata.file_ids || metadata.files).map(function (id) { return typeof id==='object'?id:state.files.find(function (file) { return file.id===id; }); }).filter(Boolean);
 }
 function nearBottom(holder) { return holder.scrollHeight-holder.scrollTop-holder.clientHeight<80; }
+function activeTurn() {
+  return currentTasks().find(function (task) { return task.status==='queued' || task.status==='running'; }) || null;
+}
 function pendingReply() {
-  const active=currentTasks().find(function (task) { return task.status==='queued' || task.status==='running'; });
+  const active=activeTurn();
   if (!active) return null;
   const last=state.messages[state.messages.length-1];
   if (last && last.role==='assistant' && last.task_id===active.id) return null;
   return active;
+}
+function placeReply(holder, row, oldTop, first) {
+  state.scrollingProgrammatically=true;
+  holder.style.scrollBehavior='auto';
+  let top=oldTop;
+  if (first && row) {
+    const box=holder.getBoundingClientRect(), rowBox=row.getBoundingClientRect();
+    const start=Math.max(0, holder.scrollTop+(rowBox.top-box.top)-12);
+    if (row.offsetHeight>holder.clientHeight-48) top=start;
+    else {
+      const overflow=rowBox.bottom-box.bottom;
+      top=overflow>0 ? Math.min(start, holder.scrollTop+overflow+16) : oldTop;
+    }
+  }
+  holder.scrollTop=top;
+  requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; });
 }
 function stickMessages() {
   const holder=$('messages');
@@ -607,22 +623,34 @@ function renderMessages(force) {
   if (!state.messages.length && !pending) {
     const c=conversation(),bot=currentBot(),empty=node('div','empty-chat'); empty.append(avatar(bot,c && c.kind==='group'),node('h2','',bot ? '你好，'+bot.name : c ? c.title : '从一段对话开始'),node('p','',botDescription(bot) || '把想法发到这里，和 Bot 一起往下做。'),node('p','empty-hint','任务在服务器上执行，离开页面后也能继续。')); holder.append(empty); return;
   }
-  state.messages.forEach(function (message) {
-    const row=node('article','message-row '+message.role); const bot=botById(message.bot_id); if (message.role!=='user') row.append(avatar(bot || primaryBot()));
+  function appendMessage(message) {
+    const row=node('article','message-row '+message.role); row.dataset.messageId=message.id; if (message.task_id) row.dataset.taskId=message.task_id;
+    if (state.awaitingReply || state.replyAnchor) row.classList.add('no-appear');
+    const bot=botById(message.bot_id); if (message.role!=='user') row.append(avatar(bot || primaryBot()));
     const block=node('div','message-block'), meta=node('div','message-meta');
     meta.append(node('strong','',message.role==='user'?'你':message.role==='system'?'工作台':bot && bot.name || 'Bot'),node('time','',time(message.created_at)));
     const content=node('div','message-content'); renderMessageContent(content,message.role==='assistant' ? withoutSpeaker(message.content, bot && bot.name) : message.content, message.role==='assistant'); block.append(meta,content);
     const attachments=messageFiles(message);
     if (attachments.length) { const files=node('div','message-files'); attachments.forEach(function (file) { files.append(fileLink(file)); }); block.append(files); }
-    if (message.task_id) { const task=state.tasks.find(function (t) { return t.id===message.task_id; }); const b=btn('查看任务',function () { openTaskDetail(message.task_id); },'subtle compact','tasks'); b.style.marginTop='5px'; if (task) b.append(statusPill(task.status)); block.append(b); }
     row.append(block); holder.append(row);
-  });
+  }
+  state.messages.forEach(appendMessage);
   if (pending) {
     const thinking=node('div','thinking-row'); thinking.setAttribute('role','status'); thinking.setAttribute('aria-label','正在思考');
     const orb=node('span','thinking-orb'); orb.setAttribute('aria-hidden','true');
     thinking.append(orb,node('span','thinking-label','正在思考')); holder.append(thinking);
   }
-  if (force || state.pinBottom || bottom) { state.pinBottom=true; stickMessages(); }
+  const last=state.messages[state.messages.length-1];
+  const reading=state.awaitingReply && last && last.role==='assistant' && last.task_id;
+  if (reading) {
+    const anchor=last.task_id;
+    const rows=holder.querySelectorAll('.message-row.assistant[data-task-id="'+anchor+'"]');
+    const row=rows.length ? rows[rows.length-1] : null;
+    const first=state.replyAnchor!==anchor;
+    state.replyAnchor=anchor; state.pinBottom=false; state.awaitingReply=false;
+    placeReply(holder, row, oldTop, first);
+  } else if (state.replyAnchor) { state.scrollingProgrammatically=true; holder.style.scrollBehavior='auto'; holder.scrollTop=oldTop; requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; }); }
+  else if (force || state.pinBottom || bottom) { state.pinBottom=true; stickMessages(); }
   else { state.scrollingProgrammatically=true; holder.style.scrollBehavior='auto'; holder.scrollTop=oldTop; requestAnimationFrame(function () { holder.style.scrollBehavior=''; state.scrollingProgrammatically=false; }); }
 }
 function renderActivity() {
@@ -632,7 +660,7 @@ function renderActivity() {
     bar.append(statusPill(active.status),node('span','activity-text',active.error || active.prompt));
     bar.append(btn('查看',function () { openTaskDetail(active.id); },'subtle compact'));
     if (['queued','running','waiting_config','waiting_user','waiting_approval','paused'].includes(active.status)) bar.append(btn('停止',function (e) { busy(e.currentTarget,function () { return taskAction(active.id,'stop'); }); },'subtle compact'));
-    if (state.pinBottom) requestAnimationFrame(stickMessages);
+    if (state.pinBottom && !state.awaitingReply) requestAnimationFrame(stickMessages);
   }
   const count=tasks.filter(function (t) { return !TERMINAL.has(t.status); }).length; $('tasks-count').textContent=count; hidden($('tasks-count'),!count);
 }
@@ -653,7 +681,7 @@ async function sendMessage(event) {
     const result=await mutation('/api/conversations/'+encodeURIComponent(state.conversationId)+'/messages','POST',body);
     $('message-input').value=''; $('message-input').style.height='auto'; state.pendingFiles=[]; renderPendingFiles();
     if (result.task) { state.tasks.unshift(result.task); state.selectedTaskId=result.task.id; }
-    state.pinBottom=true;
+    state.pinBottom=true; state.awaitingReply=true; state.replyAnchor=null;
     await loadMessages(true); renderActivity(); renderBrowserTasks(); stickMessages(); state.lastInteraction=Date.now(); schedulePoll(500);
   });
 }

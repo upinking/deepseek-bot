@@ -101,6 +101,8 @@ class _Paused(Exception):
 class DeepSeekProvider:
     """The production provider; test transports are injected into httpx, not env."""
 
+    streams = True
+
     def __init__(self, client=None):
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(90, connect=12))
         self._owns_client = client is None
@@ -109,35 +111,96 @@ class DeepSeekProvider:
         if self._owns_client:
             await self.client.aclose()
 
-    async def complete(self, *, messages, tools, config):
+    async def complete(self, *, messages, tools, config, on_text=None):
         base = config["api_base"].rstrip("/")
         url = base if base.endswith("/chat/completions") else base + "/chat/completions"
+        payload = {"model": config["model"], "messages": messages, "tools": tools,
+                   "thinking": {"type": "disabled"}, "stream": True,
+                   "stream_options": {"include_usage": True}, "max_tokens": 4096}
         try:
-            response = await self.client.post(url, headers={
+            async with self.client.stream("POST", url, headers={
                 "Authorization": "Bearer " + config["api_key"],
-                "Content-Type": "application/json"}, json={
-                    "model": config["model"], "messages": messages, "tools": tools,
-                    "thinking": {"type": "disabled"}, "stream": False, "max_tokens": 4096})
+                "Content-Type": "application/json"}, json=payload,
+                timeout=httpx.Timeout(300, connect=12)) as response:
+                if not response.is_success:
+                    raw = (await response.aread()).decode(errors="replace")
+                    reason = raw[:500]
+                    try:
+                        error = json.loads(raw).get("error", {})
+                        reason = error.get("message", reason) if isinstance(error, dict) else str(error)
+                    except (ValueError, AttributeError):
+                        pass
+                    raise ModelError(f"DeepSeek 返回 HTTP {response.status_code}：{str(reason)[:500]}")
+                if "text/event-stream" not in response.headers.get("content-type", ""):
+                    return self._complete_json(json.loads((await response.aread()).decode()), on_text)
+                return await self._complete_stream(response, on_text)
+        except ModelError:
+            raise
         except httpx.TimeoutException as exc:
             raise ModelError("DeepSeek 请求超时；本次没有得到模型结果，可检查网络后恢复任务。") from exc
         except httpx.RequestError as exc:
             raise ModelError("无法连接 DeepSeek：" + type(exc).__name__) from exc
-        if not response.is_success:
-            try:
-                error = response.json().get("error", {})
-                reason = error.get("message", "") if isinstance(error, dict) else str(error)
-            except (ValueError, AttributeError):
-                reason = "服务返回非JSON错误"
-            raise ModelError(f"DeepSeek 返回 HTTP {response.status_code}：{str(reason)[:500]}")
-        try:
-            payload = response.json()
-            message = payload["choices"][0]["message"]
-            if not isinstance(message, dict):
-                raise ValueError("message is not an object")
-            return {"message": message, "usage": payload.get("usage", {}),
-                    "finish_reason": payload["choices"][0].get("finish_reason")}
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ModelError("DeepSeek 返回格式无法识别，未冒充任务完成。") from exc
+
+    @staticmethod
+    def _complete_json(payload, on_text):
+        message = payload["choices"][0]["message"]
+        if not isinstance(message, dict):
+            raise ValueError("message is not an object")
+        if on_text and message.get("content") and not message.get("tool_calls"):
+            on_text(message.get("content") or "")
+        return {"message": message, "usage": payload.get("usage", {}),
+                "finish_reason": payload["choices"][0].get("finish_reason")}
+
+    @staticmethod
+    async def _complete_stream(response, on_text):
+        content = []
+        calls = {}
+        finish = None
+        usage = {}
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                if data == "[DONE]":
+                    break
+                continue
+            payload = json.loads(data)
+            if isinstance(payload.get("usage"), dict):
+                usage = payload["usage"]
+            choices = payload.get("choices") or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if choice.get("finish_reason"):
+                finish = choice["finish_reason"]
+            delta = choice.get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content.append(piece)
+                if on_text and not calls:
+                    on_text("".join(content))
+            for call in delta.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                slot = calls.setdefault(call.get("index", 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                if call.get("id"):
+                    slot["id"] = call["id"]
+                function = call.get("function") or {}
+                if function.get("name"):
+                    slot["function"]["name"] += function["name"]
+                if function.get("arguments"):
+                    slot["function"]["arguments"] += function["arguments"]
+        text = "".join(content)
+        message = {"role": "assistant", "content": text}
+        ordered = [calls[index] for index in sorted(calls)]
+        if ordered:
+            message["tool_calls"] = ordered
+        elif on_text and text:
+            on_text(text)
+        return {"message": message, "usage": usage, "finish_reason": finish}
 
     async def web_search(self, config, query, count, question):
         body = {"query": query, "count": count, "need_content": False}

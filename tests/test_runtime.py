@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from botapp.runtime import MAX_STEPS, Runtime
+from botapp.runtime import MAX_STEPS, DeepSeekProvider, Runtime
 from botapp.store import Store, dumps, uid
 
 
@@ -115,7 +115,7 @@ async def test_http_provider_real_protocol_and_usage(tmp_path):
         assert request.headers["Authorization"] == "Bearer test-model-secret-123"
         body = json.loads(request.content)
         assert body["thinking"] == {"type": "disabled"}
-        assert body["stream"] is False
+        assert body["stream"] is True
         assert body["model"] == "deepseek-flash"
         assert body["tools"]
         assert json.loads(row["context"])["usage"]["total_tokens"] == 35
@@ -731,3 +731,36 @@ async def test_direct_reply_omits_speaker_prefix(tmp_path):
         assert row["result"] == "这是正文"
     finally:
         await runtime.close()
+
+
+def _event_stream(parts, finish="stop", usage=None, calls=None):
+    lines = []
+    for part in parts:
+        lines.append("data: " + json.dumps({"choices": [{"delta": {"content": part}, "finish_reason": None}]}, ensure_ascii=False) + "\n")
+    if calls:
+        deltas = [{"index": index, "id": call["id"], "type": "function", "function": call["function"]} for index, call in enumerate(calls)]
+        lines.append("data: " + json.dumps({"choices": [{"delta": {"tool_calls": deltas}, "finish_reason": None}]}) + "\n")
+    lines.append("data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": finish}], "usage": usage or {"total_tokens": 4}}) + "\n")
+    lines.append("data: [DONE]\n")
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="".join(lines).encode())
+
+
+@pytest.mark.asyncio
+async def test_streaming_reply_is_saved_as_one_message(tmp_path):
+    store, _, _, task = setup(tmp_path, "写一段说明")
+
+    def handler(request):
+        return _event_stream(["先看开头", "，再写后面。"], usage={"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    runtime = Runtime(store, Browser(), provider=DeepSeekProvider(client))
+    try:
+        await runtime.start()
+        row = await wait_for(store, task["id"], {"succeeded", "failed"})
+        assert row["status"] == "succeeded", row["error"]
+        assert row["result"] == "先看开头，再写后面。"
+        saved = store.all("SELECT content FROM messages WHERE task_id=? AND role='assistant'", (task["id"],))
+        assert [item["content"] for item in saved] == ["先看开头，再写后面。"]
+    finally:
+        await runtime.close()
+        await client.aclose()
