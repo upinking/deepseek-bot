@@ -86,7 +86,6 @@
       const b=document.createElement('button'); b.type='button'; b.className='rail-mark'; b.tabIndex=-1;
       b.dataset.messageIndex=String(index);
       b.setAttribute('aria-label','第 '+(index+1)+' 条，'+entry.author+'：'+(entry.summary.slice(0,64) || '附件消息'));
-      b.style.setProperty('--mark-width',Math.min(26,8+Math.sqrt(entry.summary.length)*.9).toFixed(1)+'px');
       const line=document.createElement('span'); line.setAttribute('aria-hidden','true'); b.append(line);
       b.addEventListener('pointerenter',function (e) { if (e.pointerType!=='touch') { clearTimeout(hideTimer); preview(index); } });
       b.addEventListener('focus',function () { clearTimeout(hideTimer); preview(index); });
